@@ -1,0 +1,20 @@
+# Archivos de compilación
+*.o
+*.out
+*.exe
+
+# Binarios generados
+master
+vista
+jugador
+
+# Archivos de prueba / logs
+*.log
+*.tmp
+
+# Archivos de sistema
+.DS_Store
+
+# Archivos de Docker temporales
+*.pid
+
