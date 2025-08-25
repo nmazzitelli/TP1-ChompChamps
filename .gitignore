@@ -5,8 +5,8 @@
 
 # Binarios generados
 master
-vista
-jugador
+view
+player
 
 # Archivos de prueba / logs
 *.log
