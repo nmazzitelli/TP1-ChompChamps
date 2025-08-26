@@ -11,48 +11,17 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <semaphore.h>
+#include "sharedHeaders.h"
 
 // ==== Config / nombres de SHM ====
 #define SHM_STATE "/game_state"
 #define SHM_SYNC  "/game_sync"
-
-#define NAME_LEN       16
-#define MAX_PLAYERS     9
 #define MIN_BOARD_SIZE 10
-
 #define DEFAULT_WIDTH   12
 #define DEFAULT_HEIGHT  12
 #define DEFAULT_DELAY  600   // ms entre frames
 #define DEFAULT_TIMEOUT 10   // s  de “juego”
 #define DEFAULT_SEED     7
-
-// ==== Tipos compartidos (idénticos a view.c) ====
-typedef struct {
-    char name[NAME_LEN];
-    unsigned int score;
-    unsigned int inv_moves;
-    unsigned int v_moves;
-    unsigned short pos_x, pos_y;
-    pid_t player_pid;
-    bool blocked;
-} player_t;
-
-typedef struct {
-    unsigned short width, height;
-    unsigned int   num_players;
-    player_t       players[MAX_PLAYERS];
-    bool           game_over;
-    int            board[];                // flexible array
-} state_t;
-
-typedef struct {
-    sem_t print_needed;       // A
-    sem_t print_done;         // B
-    sem_t master_utd;         // (no usado aún)
-    sem_t game_state_change;  // (no usado aún)
-    sem_t sig_var;            // (no usado aún)
-    unsigned int readers;     // (no usado aún)
-} sync_t;
 
 // ==== Utilidades de tiempo ====
 static uint64_t now_ms(void){

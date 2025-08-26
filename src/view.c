@@ -7,40 +7,12 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <ncurses.h>
+#include "sharedHeaders.h"
 
 #define SHM_STATE "/game_state"
 #define SHM_SYNC "/game_sync"
 #define TRUE 1
 #define FALSE 0
-#define NAME_LEN 16
-#define MAX_PLAYERS 9
-
-typedef struct {
-    char name[NAME_LEN]; // Nombre del jugador
-    unsigned int score; // Puntaje
-    unsigned int inv_moves; // Cantidad de solicitudes de movimientos inválidas realizadas
-    unsigned int v_moves; // Cantidad de solicitudes de movimientos válidas realizadas
-    unsigned short pos_x, pos_y; // Coordenadas x e y en el tablero
-    pid_t player_pid; // Identificador de proceso
-    bool blocked; // Indica si el jugador tiene movimientos válidos disponibles
-} player_t;   
-
-typedef struct{
-    unsigned short width, height; // dimensiones
-    unsigned int num_players; // cantidad de jugadores
-    player_t players[MAX_PLAYERS]; // lista de jugadores
-    bool game_over; // si el juego termino o no
-    int board[]; // tablero dinamico
-} state_t;
-
-typedef struct {
-    sem_t print_needed; // Se usa para indicarle a la vista que hay cambios por imprimir
-    sem_t print_done; // Se usa para indicarle al master que la vista terminó de imprimir
-    sem_t master_utd; // Mutex para evitar inanición del master al acceder al estado
-    sem_t game_state_change; // Mutex para el estado del juego
-    sem_t sig_var; // Mutex para la siguiente variable
-    unsigned int readers; // Cantidad de jugadores leyendo el estado
-} sync_t;
 
 // nuevo feature
 /* init/cleanup */

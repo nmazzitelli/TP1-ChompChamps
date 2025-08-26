@@ -7,7 +7,7 @@ LDLIBS  := -pthread
 ifeq ($(UNAME_S),Linux)
 LDLIBS  += -lrt
 endif
-LIBS_VIEW = -lncurses
+LIBS_VIEW := -lncurses
 
 # Fuentes y binarios
 SRC  := $(wildcard src/*.c)
@@ -17,15 +17,17 @@ DEPS := $(BIN:%=%.d)
 # --- COMPILACIÓN ---
 all: $(BIN)
 
-# regla patrón: src/foo.c -> bin/foo
-bin/%: src/%.c | bin
+# Regla patrón: src/foo.c -> bin/foo
+# OJO: el header compartido está en src/
+bin/%: src/%.c src/sharedHeaders.h | bin
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 bin:
 	mkdir -p bin
 
-bin/view: src/view.c
-	$(CC) $(CFLAGS) -o $@ $< -pthread -lrt $(LIBS_VIEW)
+# view necesita ncurses además de las libs comunes
+bin/view: src/view.c src/sharedHeaders.h | bin
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS) $(LIBS_VIEW)
 
 clean:
 	rm -rf bin
@@ -34,6 +36,7 @@ list:
 	@echo "Fuentes:  $(SRC)"
 	@echo "Binarios: $(BIN)"
 
+# Archivos de dependencias (si no existen, no falla)
 -include $(DEPS)
 
 # --- EJECUCIÓN ---
@@ -46,13 +49,11 @@ D ?= 200
 T ?= 10
 S ?= 0
 
-# Lanza view en background y luego master con un jugador (demo)
 run-demo: all
 	@echo "Lanzando view (bg) y master (fg)..."
 	$(VIEW) & \
 	$(MASTER) -p $(PLAYER)
 
-# Igual que arriba pero pasando flags reales
 run: all
 	@echo "Run: w=$(W) h=$(H) d=$(D) t=$(T) s=$(S)"
 	$(VIEW) & \
