@@ -1,2 +1,2 @@
-bin/master: src/master.c src/sharedHeaders.h
-src/sharedHeaders.h:
+bin/master: src/master.c include/sharedHeaders.h
+include/sharedHeaders.h:

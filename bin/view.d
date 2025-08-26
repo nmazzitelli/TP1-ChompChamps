@@ -1,2 +1,2 @@
-bin/view: src/view.c src/sharedHeaders.h
-src/sharedHeaders.h:
+bin/view: src/view.c include/sharedHeaders.h
+include/sharedHeaders.h:
