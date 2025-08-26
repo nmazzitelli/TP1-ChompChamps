@@ -18,3 +18,8 @@ player
 # Archivos de Docker temporales
 *.pid
 
+# IDE
+.idea/
+.vscode/
+*.iml
+

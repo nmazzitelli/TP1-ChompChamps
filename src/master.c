@@ -1,158 +1,176 @@
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdarg.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <semaphore.h>
-#include <unistd.h>
-#include <errno.h>
-#include <stdbool.h>
-#include <string.h>
-#define TRUE 1
-#define MAX_ARG_COUNT 23
-#define MIN_BOARD_SIZE 10
-#define MAX_PLAYERS 9
-#define NAME_LEN 16
 
+// ==== Config / nombres de SHM ====
+#define SHM_STATE "/game_state"
+#define SHM_SYNC  "/game_sync"
+
+#define NAME_LEN       16
+#define MAX_PLAYERS     9
+#define MIN_BOARD_SIZE 10
+
+#define DEFAULT_WIDTH   12
+#define DEFAULT_HEIGHT  12
+#define DEFAULT_DELAY  600   // ms entre frames
+#define DEFAULT_TIMEOUT 10   // s  de “juego”
+#define DEFAULT_SEED     7
+
+// ==== Tipos compartidos (idénticos a view.c) ====
 typedef struct {
-    char name[NAME_LEN]; // Nombre del jugador
-    unsigned int score; // Puntaje
-    unsigned int inv_moves; // Cantidad de solicitudes de movimientos inválidas realizadas
-    unsigned int v_moves; // Cantidad de solicitudes de movimientos válidas realizadas
-    unsigned short pos_x, pos_y; // Coordenadas x e y en el tablero
-    pid_t player_pid; // Identificador de proceso
-    bool blocked; // Indica si el jugador tiene movimientos válidos disponibles
+    char name[NAME_LEN];
+    unsigned int score;
+    unsigned int inv_moves;
+    unsigned int v_moves;
+    unsigned short pos_x, pos_y;
+    pid_t player_pid;
+    bool blocked;
 } player_t;
 
-typedef struct{
-    unsigned short width, height; // dimensiones
-    unsigned int num_players; // cantidad de jugadores
-    player_t players[MAX_PLAYERS]; // lista de jugadores
-    bool game_over; // si el juego termino o no
-    int board[]; // tablero dinamico
+typedef struct {
+    unsigned short width, height;
+    unsigned int   num_players;
+    player_t       players[MAX_PLAYERS];
+    bool           game_over;
+    int            board[];                // flexible array
 } state_t;
 
 typedef struct {
-    sem_t print_needed; // Se usa para indicarle a la vista que hay cambios por imprimir
-    sem_t print_done; // Se usa para indicarle al master que la vista terminó de imprimir
-    sem_t master_utd; // Mutex para evitar inanición del master al acceder al estado
-    sem_t game_state_change; // Mutex para el estado del juego
-    sem_t sig_var; // Mutex para la siguiente variable
-    unsigned int readers; // Cantidad de jugadores leyendo el estado
+    sem_t print_needed;       // A
+    sem_t print_done;         // B
+    sem_t master_utd;         // (no usado aún)
+    sem_t game_state_change;  // (no usado aún)
+    sem_t sig_var;            // (no usado aún)
+    unsigned int readers;     // (no usado aún)
 } sync_t;
 
+// ==== Utilidades de tiempo ====
+static uint64_t now_ms(void){
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec*1000 + ts.tv_nsec/1000000;
+}
+static void sleep_ms(unsigned ms){
+    struct timespec ts = { ms/1000, (long)(ms%1000)*1000000L };
+    nanosleep(&ts, NULL);
+}
 
-//creates shared memory
-void * createSHM(char * name, size_t size, mode_t mode){
-    int fd;
-    fd = shm_open(name, O_RDWR | O_CREAT, mode); 
-    if(fd == -1){                                
-        perror("shm_open");
-        exit(EXIT_FAILURE);
-    }
-
-    if(strcmp(name, "/game_state") == 0){
-        state_t temp_game;
-        read(fd, &temp_game, sizeof(state_t));
-        size = sizeof(state_t) + temp_game.width * temp_game.height * sizeof(int);
-    }
-
-    if(-1 == ftruncate(fd, size)){
-        perror("ftruncate");
-        exit(EXIT_FAILURE);
-    }
-
-    void * p = mmap(NULL, size, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0);
-    if(p == MAP_FAILED){
-        perror("mmap");
-        exit(EXIT_FAILURE);
-    }
-
+// ==== SHM genérica ====
+static void *create_shm(const char *name, size_t size, mode_t mode){
+    int fd = shm_open(name, O_RDWR | O_CREAT, mode);
+    if (fd == -1) { perror("shm_open"); exit(EXIT_FAILURE); }
+    if (size == 0) { fprintf(stderr,"create_shm(%s): size=0\n", name); exit(EXIT_FAILURE); }
+    if (ftruncate(fd, (off_t)size) == -1) { perror("ftruncate"); exit(EXIT_FAILURE); }
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) { perror("mmap"); exit(EXIT_FAILURE); }
+    close(fd);
     return p;
 }
 
-int process_players(char ** argv, int argc, int idx, state_t * game_state){
-    int i = idx;
-    if(argv[i][0] == '-' || argv[i][0] == ' ' || argv[i][0] == '\n'){
-        perror("bad usage of -p [players]");
-        exit(EXIT_FAILURE);
-    }
+// ==== Args ====
+typedef struct {
+    int  W, H;
+    unsigned delay_ms;
+    unsigned timeout_s;
+    unsigned seed;
+} opts_t;
 
-    while(argv[i][0] !=  '-' && i < argc){
-        //initialize players
-        printf("initializing players");
-        i++;
-    }
-
-    return i; 
-}
-
-
-void arg_handler(int argc, char ** argv, state_t * game_state){
-    if(argc > MAX_ARG_COUNT){
-        perror("too many arguments");
-        exit(EXIT_FAILURE);
-    }
-
-    if(argc < 2){
-        perror("Error: At least one player must be specified using -p.");
-        exit(EXIT_FAILURE);
-    }
-
-    int i = 1;
-    while(i < argc){
-        if(strcmp(argv[i], "-p") == 0){
-            i = process_players(argv, argc, i + 1, game_state);
-        }
-        if(strcmp(argv[i], "-v") == 0){
-            
+static opts_t parse_args(int argc, char **argv){
+    opts_t o = { DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DELAY, DEFAULT_TIMEOUT, DEFAULT_SEED };
+    int opt;
+    while ((opt = getopt(argc, argv, "w:h:d:t:s:")) != -1){
+        switch(opt){
+            case 'w': o.W = atoi(optarg); break;
+            case 'h': o.H = atoi(optarg); break;
+            case 'd': o.delay_ms = (unsigned)atoi(optarg); break;
+            case 't': o.timeout_s = (unsigned)atoi(optarg); break;
+            case 's': o.seed = (unsigned)atoi(optarg); break;
+            default:
+                fprintf(stderr, "Uso: %s [-w W] [-h H] [-d ms] [-t s] [-s seed]\n", argv[0]);
+                exit(EXIT_FAILURE);
         }
     }
+    if (o.W < MIN_BOARD_SIZE || o.H < MIN_BOARD_SIZE){
+        fprintf(stderr, "El tablero mínimo es %dx%d.\n", MIN_BOARD_SIZE, MIN_BOARD_SIZE);
+        exit(EXIT_FAILURE);
+    }
+    return o;
 }
 
-int main(int argc, char **argv) {
+// ==== Un frame del ping-pong A/B ====
+static void frame(sync_t *sync, unsigned delay_ms){
+    sem_post(&sync->print_needed);  // A: pedir imprimir
+    sem_wait(&sync->print_done);    // B: esperar a que la vista termine
+    if (delay_ms) sleep_ms(delay_ms);
+}
+
+// ==== Main ====
+int main(int argc, char **argv){
+    opts_t opt = parse_args(argc, argv);
+
+    // empezar limpio
+    shm_unlink(SHM_STATE);
+    shm_unlink(SHM_SYNC);
+
     // 1) Crear /game_state con sólo el header
-    size_t header_size = sizeof(state_t);
-    state_t *game_state = createSHM("/game_state", header_size, 0644);
+    size_t header_sz = sizeof(state_t);
+    state_t *st = create_shm(SHM_STATE, header_sz, 0644);
 
-    // setear dimensiones mínimas para la demo
-    game_state->width = 10;
-    game_state->height = 10;
-    game_state->num_players = 0;
-    game_state->game_over = false;
+    // 2) Inicializar header
+    st->width  = (unsigned short)opt.W;
+    st->height = (unsigned short)opt.H;
+    st->num_players = 0;
+    st->game_over   = false;
 
-    // 2) Redimensionar /game_state al tamaño real y remapear
-    int fd_state = shm_open("/game_state", O_RDWR, 0);
-    if (fd_state == -1) { perror("shm_open /game_state"); exit(EXIT_FAILURE); }
+    // 3) Redimensionar /game_state al tamaño real y remapear
+    size_t cells = (size_t)st->width * st->height;
+    size_t full_sz = sizeof(state_t) + cells * sizeof(int);
 
-    size_t full_size = sizeof(state_t) + game_state->width * game_state->height * sizeof(int);
-    if (ftruncate(fd_state, (off_t)full_size) == -1) { perror("ftruncate /game_state"); exit(EXIT_FAILURE); }
+    // reabrir y crecer
+    int fd_state = shm_open(SHM_STATE, O_RDWR, 0);
+    if (fd_state == -1) { perror("shm_open state(reopen)"); exit(EXIT_FAILURE); }
+    if (ftruncate(fd_state, (off_t)full_sz) == -1) { perror("ftruncate state(full)"); exit(EXIT_FAILURE); }
 
-    // remapear con el tamaño nuevo
-    munmap(game_state, header_size);
-    game_state = mmap(NULL, full_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd_state, 0);
-    if (game_state == MAP_FAILED) { perror("mmap resized /game_state"); exit(EXIT_FAILURE); }
+    // remap con tamaño final
+    munmap(st, header_sz);
+    st = mmap(NULL, full_sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd_state, 0);
+    if (st == MAP_FAILED) { perror("mmap state(full)"); exit(EXIT_FAILURE); }
+    close(fd_state);
 
-    // 3) Inicializar tablero
-    int cells = game_state->width * game_state->height;
-    for (int i = 0; i < cells; i++) game_state->board[i] = (i % 9); // 0..8
+    // 4) Inicializar tablero con recompensas 1..9 (negativos = territorio de jugador)
+    srand(opt.seed);
+    for (size_t i = 0; i < cells; i++){
+        st->board[i] = (rand() % 9) + 1;   // 1..9
+    }
 
-    // 4) Crear /game_sync + semáforos
-    sync_t *sync = createSHM("/game_sync", sizeof(sync_t), 0666);
-    sem_init(&sync->print_needed, 1, 0);
-    sem_init(&sync->print_done,   1, 0);
-    sem_init(&sync->master_utd,   1, 1);
-    sem_init(&sync->game_state_change, 1, 1);
-    sem_init(&sync->sig_var, 1, 1);
+    // 5) Crear /game_sync y semáforos
+    sync_t *sync = create_shm(SHM_SYNC, sizeof(sync_t), 0666);
+    sem_init(&sync->print_needed,       1, 0);
+    sem_init(&sync->print_done,         1, 0);
+    sem_init(&sync->master_utd,         1, 1);
+    sem_init(&sync->game_state_change,  1, 1);
+    sem_init(&sync->sig_var,            1, 1);
     sync->readers = 0;
 
-    // 5) Disparar una impresión y esperar a la vista
-    sem_post(&sync->print_needed);
-    sem_wait(&sync->print_done);
+    // 6) Loop de frames hasta timeout (solo visualización por ahora)
+    uint64_t deadline = now_ms() + (uint64_t)opt.timeout_s*1000;
+    while (now_ms() < deadline){
+        // (Aquí, más adelante, aplicarías movimientos, puntajes, etc.)
+        frame(sync, opt.delay_ms);
+    }
 
-    // 6) Terminar el juego y avisar a la vista para que salga
-    game_state->game_over = true;
-    sem_post(&sync->print_needed);
-
+    // 7) Cierre limpio: marcar fin y pedir un último frame
+    st->game_over = true;
+    frame(sync, 0);
 
     return 0;
 }

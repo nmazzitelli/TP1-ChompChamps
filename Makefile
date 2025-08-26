@@ -7,6 +7,7 @@ LDLIBS  := -pthread
 ifeq ($(UNAME_S),Linux)
 LDLIBS  += -lrt
 endif
+LIBS_VIEW = -lncurses
 
 # Fuentes y binarios
 SRC  := $(wildcard src/*.c)
@@ -22,6 +23,9 @@ bin/%: src/%.c | bin
 
 bin:
 	mkdir -p bin
+
+bin/view: src/view.c
+	$(CC) $(CFLAGS) -o $@ $< -pthread -lrt $(LIBS_VIEW)
 
 clean:
 	rm -rf bin
