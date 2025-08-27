@@ -21,7 +21,7 @@
 #define DEFAULT_HEIGHT  12
 #define DEFAULT_DELAY  600   // ms entre frames
 #define DEFAULT_TIMEOUT 10   // s  de “juego”
-#define DEFAULT_SEED     7
+#define DEFAULT_SEED time(NULL)
 
 // ==== Utilidades de tiempo ====
 static uint64_t now_ms(void){
