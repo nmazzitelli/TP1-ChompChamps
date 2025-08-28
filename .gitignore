@@ -23,3 +23,9 @@ player
 .vscode/
 *.iml
 
+# Archivos de dependencias generados por -MMD
+*.d
+
+# Ejecutables compilados en bin/
+bin/
+
