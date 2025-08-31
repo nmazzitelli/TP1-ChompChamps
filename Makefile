@@ -5,7 +5,7 @@ UNAME_S := $(shell uname -s)
 
 CC      := gcc
 CFLAGS  := -Wall -Wextra -g -O0 -Iinclude -MMD -MP
-LDLIBS  := -pthread
+LDLIBS  := -pthread -lm
 ifeq ($(UNAME_S),Linux)          # Docker / Linux (imagen oficial)
   LDLIBS += -lrt                 # librt en Linux
 else                             # macOS (solo por conveniencia local)
@@ -35,7 +35,7 @@ SHMTOOL:= $(BIN_DIR)/shm_tool
 IMAGE := agodio/itba-so-multi-platform:3.0
 CONTAINER_NAME := itba-so-tp1
 
-.PHONY: docker deps build all clean demo_view run_master destroy_shm
+.PHONY: docker deps build all clean demo demo_view run_master destroy_shm check_term
 
 docker:
 	@echo ">> Lanzando contenedor $(CONTAINER_NAME) con imagen $(IMAGE)"
@@ -68,29 +68,38 @@ $(SHMTOOL): $(SRC_DIR)/shm_tool.c $(OBJS_COMMON) | $(BIN_DIR)
 # =========================
 deps:
 	@echo ">> Instalando dependencias (ncurses)..."
-	@apt-get update -y && apt-get install -y --no-install-recommends \
-	  libncurses5-dev libncursesw5-dev >/dev/null && echo "✔ ncurses instalado"
+	@apt-get update -y >/dev/null && apt-get install -y --no-install-recommends \
+	  libncurses5-dev libncursesw5-dev ncurses-term >/dev/null && echo "✔ ncurses instalado"
 
 # =========================
-# Demos/Helpers (Acorde a TU master: ./master W H [secs])
+# Helpers de ejecución
 # =========================
-W ?= 14
-H ?= 10
-S ?= 8     # segundos que queda visible
+SAFE_TERM := $(shell sh -c 't="$${TERM:-xterm-256color}"; echo "$$t" | sed s/_/-/g')
 
-# limpia SHMs viejas (muy recomendable antes de probar)
+W ?= 20
+H ?= 20
+S ?= 100
+NPLAYERS ?= 2
+STEP_MS ?= 100
+
 destroy_shm: build
 	$(SHMTOOL) destroy || true
 
-# demo para ver la vista que forkea el master
-demo_view: build
-	@echo ">> Demo vista: W=$(W) H=$(H) S=$(S)s"
-	TERM=xterm-256color $(MASTER) $(W) $(H) $(S)
+check_term:
+	@echo ">> TERM del entorno: '$(TERM)'  -> usando normalizado: '$(SAFE_TERM)'"
+	@infocmp $(SAFE_TERM) >/dev/null 2>&1 && echo "✔ terminfo OK para $(SAFE_TERM)" || echo "✖ terminfo NO encontrada (instalar ncurses-term)"
 
-# ejecución manual con args crudos (por compatibilidad)
+demo: build
+	@echo ">> Demo: W=$(W) H=$(H) S=$(S)s NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS)ms"
+	@echo ">> Usando TERM=$(SAFE_TERM)"
+	@env TERM=$(SAFE_TERM) NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS) $(MASTER) $(W) $(H) $(S)
+
+demo_view: demo
+
 run_master: build
-	@echo ">> Ejecutando master con: $(ARGS)"
-	TERM=xterm-256color $(MASTER) $(ARGS)
+	@echo ">> Ejecutando master con: $(ARGS) | NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS)ms"
+	@echo ">> Usando TERM=$(SAFE_TERM)"
+	@env TERM=$(SAFE_TERM) NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS) $(MASTER) $(ARGS)
 
 # =========================
 # Limpieza

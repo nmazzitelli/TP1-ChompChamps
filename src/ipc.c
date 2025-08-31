@@ -13,7 +13,7 @@ size_t ipc_state_size(unsigned short w, unsigned short h) {
     return sizeof(state_t) + (size_t)w * (size_t)h * sizeof(int);
 }
 
-// ---------- helpers internos ----------
+// helpers internos
 static int create_or_open(const char *name, bool *created) {
     if (created) *created = false;
     int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0660);
@@ -28,7 +28,7 @@ static void *map_fd(int fd, size_t sz) {
     return (p == MAP_FAILED) ? NULL : p;
 }
 
-// ---------- /game_state ----------
+// /game_state
 state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *existed) {
     bool created = false;
     int fd = create_or_open(SHM_STATE, &created);
@@ -52,7 +52,7 @@ state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *exis
         st->height = h;
         st->num_players = 0;
         st->game_over = false;
-        // board[] queda en 0; el master luego lo pobla (1..9) según seed
+        // board[] queda en 0, el master luego lo pobla (1 a 9) según seed
     }
     if (existed) *existed = !created;
     return st;
@@ -72,7 +72,7 @@ state_t* ipc_open_and_map_state(void) {
 
 void ipc_unmap_state(state_t *st) {
     if (!st) return;
-    // Para desmapear necesitamos el tamaño; lo inferimos del header
+    // Para desmapear necesitamos el tamaño, lo inferimos del header
     size_t sz = ipc_state_size(st->width, st->height);
     munmap(st, sz);
 }
@@ -81,7 +81,7 @@ int ipc_unlink_state(void) {
     return shm_unlink(SHM_STATE);
 }
 
-// ---------- /game_sync ----------
+// /game_sync
 sync_t* ipc_create_and_map_sync(bool *created) {
     bool was_created = false;
     int fd = create_or_open(SHM_SYNC, &was_created);

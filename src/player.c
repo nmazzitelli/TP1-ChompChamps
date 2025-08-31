@@ -17,7 +17,7 @@ static void reader_enter(sync_t *sy){
 static void reader_exit(sync_t *sy){
     sem_wait(&sy->E);
     sy->F--;
-    if (sy->F == 0) sem_post(&sy->D); // último lector libera escritores
+    if (sy->F == 0) sem_post(&sy->D); // ultimo lector libera escritores
     sem_post(&sy->E);
 }
 
@@ -43,27 +43,32 @@ int main(int argc, char **argv){
     // Semilla distinta por proceso
     unsigned seed = (unsigned)time(NULL) ^ ((unsigned)getpid()<<16) ^ (unsigned)me;
 
-    for (;;){
+    while (1){
+        // Esperar a que el master procese el movimiento anterior y nos habilite UNO nuevo
         if (sem_wait(&sy->G[me]) != 0){
             if (errno == EINTR) continue;
             break;
         }
 
-        // ¿Se terminó el juego?
+        // ¿Se termino el juego?
         reader_enter(sy);
         bool over = st->game_over;
         reader_exit(sy);
-        if (over){
-            sem_post(&sy->G[me]);
+        if (over) break;
+
+        // En la version simple no miramos el tablero: movemos aleatorio 0 a 7
+        unsigned char dir = (unsigned char)(rand_r(&seed) % 8);
+
+        // Enviar exactamente 1 dirección (0 a 7) por turno al master por fd=1
+        // Si el master cerró el pipe, write fallara con EPIPE y terminamos.
+        ssize_t w = write(STDOUT_FILENO, &dir, 1);
+        if (w < 0 && errno == EPIPE){
+            // Máster ya no nos lee -> bloqueado por diseño del master
             break;
         }
 
-        // Enviar exactamente 1 dirección (0 a 7) por turno
-        unsigned char dir = (unsigned char)(rand_r(&seed) % 8);
-        (void)!write(STDOUT_FILENO, &dir, 1);
-
-        // Devolver el "batón" al máster
-        sem_post(&sy->G[me]);
+        // Importante: NO hacemos sem_post(G[me]). El master volvera a postear
+        // cuando haya procesado nuestro movimiento, habilitando el proximo.
     }
 
     ipc_unmap_sync(sy);
