@@ -1,61 +1,102 @@
-# ===== Imagen y contenedor =====
-IMAGE      ?= agodio/itba-so-multi-platform:3.0
-CONTAINER  ?= chomp
-MOUNT_PATH ?= /work
+# =========================
+# Config detección de SO
+# =========================
+UNAME_S := $(shell uname -s)
 
-# ===== Compilación dentro del contenedor =====
 CC      := gcc
 CFLAGS  := -Wall -Wextra -g -O0 -Iinclude -MMD -MP
-LDLIBS  := -pthread -lrt
+LDLIBS  := -pthread
+ifeq ($(UNAME_S),Linux)          # Docker / Linux (imagen oficial)
+  LDLIBS += -lrt                 # librt en Linux
+else                             # macOS (solo por conveniencia local)
+  CFLAGS += -Wno-deprecated-declarations
+endif
 
-W ?= 12
-H ?= 12
+# ncurses sólo para la vista
+LIBS_VIEW := -lncurses
 
-# Abre una shell interactiva dentro del contenedor con tu repo montado.
-# Desde esa shell vas a correr: make deps  y  make run  /  make run-demo
-docker:
-	@docker rm -f $(CONTAINER) >/dev/null 2>&1 || true
-	@docker run --rm -it --name $(CONTAINER) \
-		-v "$$(pwd)":$(MOUNT_PATH) -w $(MOUNT_PATH) \
-		$(IMAGE) bash
+# =========================
+# Rutas y archivos
+# =========================
+SRC_DIR := src
+BIN_DIR := bin
 
-# Instala ncurses (para la vista). Corre esto **dentro del contenedor**.
-deps:
-	@apt-get update -y >/dev/null && \
-	apt-get install -y --no-install-recommends libncurses5-dev libncursesw5-dev >/dev/null && \
-	echo "✔ ncurses instalado"
-
-# ====== Build de master/view (adentro del contenedor) ======
-BIN := bin
-SRC := src
-
-SRCS_COMMON := $(SRC)/ipc.c
+SRCS_COMMON := $(SRC_DIR)/ipc.c
 OBJS_COMMON := $(SRCS_COMMON:.c=.o)
 
-# Generar deps automáticas y compilar includes de tu carpeta
-CFLAGS += -MMD -MP -Iinclude
+MASTER := $(BIN_DIR)/master
+VIEW   := $(BIN_DIR)/view
+PLAYER := $(BIN_DIR)/player
+SHMTOOL:= $(BIN_DIR)/shm_tool
 
-# Asegura que exista bin/
-$(BIN):
-	@mkdir -p $(BIN)
+# =========================
+# Docker (host)
+# =========================
+IMAGE := agodio/itba-so-multi-platform:3.0
+CONTAINER_NAME := itba-so-tp1
 
-# Regla genérica para .o en src/
-$(SRC)/%.o: $(SRC)/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+.PHONY: docker deps build all clean demo_view run_master destroy_shm
 
-# Ejecutables
-$(BIN)/master: $(BIN) $(SRC)/master.c $(OBJS_COMMON)
-	$(CC) $(CFLAGS) -o $@ $(SRC)/master.c $(OBJS_COMMON) $(LDLIBS)
+docker:
+	@echo ">> Lanzando contenedor $(CONTAINER_NAME) con imagen $(IMAGE)"
+	docker run --rm -it --name $(CONTAINER_NAME) -v "$$(pwd)":/work -w /work $(IMAGE) bash
 
-$(BIN)/view: $(BIN) $(SRC)/view.c $(OBJS_COMMON)
-	$(CC) $(CFLAGS) -o $@ $(SRC)/view.c $(OBJS_COMMON) $(LDLIBS) -lncurses
+# =========================
+# Build
+# =========================
+all: build
 
-# Mantengo tu demo de shm_tool, sumo build general y run-demo estático
-build: $(BIN)/shm_tool $(BIN)/master $(BIN)/view
-	@echo "✔ build ok"
+build: $(BIN_DIR) $(MASTER) $(VIEW) $(PLAYER) $(SHMTOOL)
 
-run-demo: build
-	@./bin/master $(W) $(H)
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
 
-# Incluir dependencias generadas por -MMD
--include $(SRC)/*.d
+$(MASTER): $(SRC_DIR)/master.c $(OBJS_COMMON) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(VIEW): $(SRC_DIR)/view.c $(OBJS_COMMON) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS) $(LIBS_VIEW)
+
+$(PLAYER): $(SRC_DIR)/player.c $(OBJS_COMMON) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(SHMTOOL): $(SRC_DIR)/shm_tool.c $(OBJS_COMMON) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+# =========================
+# Deps (dentro del contenedor)
+# =========================
+deps:
+	@echo ">> Instalando dependencias (ncurses)..."
+	@apt-get update -y && apt-get install -y --no-install-recommends \
+	  libncurses5-dev libncursesw5-dev >/dev/null && echo "✔ ncurses instalado"
+
+# =========================
+# Demos/Helpers (Acorde a TU master: ./master W H [secs])
+# =========================
+W ?= 14
+H ?= 10
+S ?= 8     # segundos que queda visible
+
+# limpia SHMs viejas (muy recomendable antes de probar)
+destroy_shm: build
+	$(SHMTOOL) destroy || true
+
+# demo para ver la vista que forkea el master
+demo_view: build
+	@echo ">> Demo vista: W=$(W) H=$(H) S=$(S)s"
+	TERM=xterm-256color $(MASTER) $(W) $(H) $(S)
+
+# ejecución manual con args crudos (por compatibilidad)
+run_master: build
+	@echo ">> Ejecutando master con: $(ARGS)"
+	TERM=xterm-256color $(MASTER) $(ARGS)
+
+# =========================
+# Limpieza
+# =========================
+clean:
+	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(BIN_DIR)/*
+	@echo "✔ clean"
+
+-include $(SRC_DIR)/*.d
