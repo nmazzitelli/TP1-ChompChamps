@@ -108,4 +108,17 @@ clean:
 	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(BIN_DIR)/*
 	@echo "✔ clean"
 
+#=========================
+# Demo 2 (local, no en Docker)
+#=========================
+
+bin/demo2: src/demo2.c
+	$(CC) $(CFLAGS) -o bin/demo2 src/demo2.c -lncurses
+
+demo2: bin/demo2 bin/master bin/player bin/view
+	./bin/demo2
+
+
+
+
 -include $(SRC_DIR)/*.d
