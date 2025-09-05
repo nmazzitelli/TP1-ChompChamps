@@ -5,58 +5,80 @@
 #include <semaphore.h>
 #include <sys/types.h>   // pid_t
 
-// Constantes compartidas
+// constantes compartidas
+#define SHM_STATE     "/game_state"
+#define SHM_SYNC      "/game_sync"
+#define NAME_LEN      16
+#define MAX_PLAYERS    9
 
-#define SHM_STATE    "/game_state"
-#define SHM_SYNC     "/game_sync"
-#define NAME_LEN     16
-#define MAX_PLAYERS   9
-
-// Direcciones de movimiento
-// Códigos 0..7, empezando en arriba y en sentido horario
+// direcciones 0 a 7 (arriba y sentido horario)
 typedef enum {
-    DIR_UP = 0,          // (0,-1)
-    DIR_UP_RIGHT = 1,    // (+1,-1)
-    DIR_RIGHT = 2,       // (+1, 0)
-    DIR_DOWN_RIGHT = 3,  // (+1,+1)
-    DIR_DOWN = 4,        // (0,+1)
-    DIR_DOWN_LEFT = 5,   // (-1,+1)
-    DIR_LEFT = 6,        // (-1, 0)
-    DIR_UP_LEFT = 7      // (-1,-1)
+    DIR_UP = 0,       // (0,-1)
+    DIR_UP_RIGHT,     // (+1,-1)
+    DIR_RIGHT,        // (+1, 0)
+    DIR_DOWN_RIGHT,   // (+1,+1)
+    DIR_DOWN,         // (0,+1)
+    DIR_DOWN_LEFT,    // (-1,+1)
+    DIR_LEFT,         // (-1, 0)
+    DIR_UP_LEFT       // (-1,-1)
 } direction_t;
 
-// Estado de cada jugador
+// desplazamientos
+static const int DX[8] = { 0, 1, 1, 1, 0,-1,-1,-1 };
+static const int DY[8] = {-1,-1, 0, 1, 1, 1, 0,-1 };
+
+static inline int  idx_xy(int x,int y,int W){ return y*W + x; }
+static inline bool in_bounds(int x,int y,int W,int H){
+    return (0<=x && x<W && 0<=y && y<H);
+}
+
+// celdas
+// libre: 1 a 9
+// cuerpo jugador i: -(i)
+// cabeza jugador i: -(100+i)
+// muerto jugador i: -(200+i)
+#define CELL_BODY(i) (-(i))
+#define CELL_HEAD(i) (-(100 + (i)))
+#define CELL_DEAD(i) (-(200 + (i)))
+
+static inline int is_dead (int v){ return v <= -200; }
+static inline int is_head (int v){ return v <= -100 && v > -200; }
+static inline int is_body (int v){ return v <= 0    && v > -100; }
+static inline int id_from_dead(int v){ return -(200) - v; }
+static inline int id_from_head(int v){ return -(100) - v; }
+static inline int id_from_body(int v){ return -v; }
+
+// estado de cada jugador
 typedef struct {
-    char name[NAME_LEN];     // Nombre del jugador
-    unsigned int score;      // Puntaje
-    unsigned int inv_moves;  // Cantidad de movimientos inválidos
-    unsigned int v_moves;    // Cantidad de movimientos válidos
-    unsigned short pos_x;    // Coordenada x
-    unsigned short pos_y;    // Coordenada y
-    pid_t player_pid;        // PID del proceso jugador
-    bool blocked;            // true si se detectó EOF en su pipe
+    char name[NAME_LEN];
+    unsigned int score;
+    unsigned int inv_moves;
+    unsigned int v_moves;
+    unsigned short pos_x;
+    unsigned short pos_y;
+    pid_t player_pid;
+    bool  blocked;
 } player_t;
 
-// Estado global del juego
-// Contiene dimensiones, jugadores, flag de fin y el tablero
+// estado global (SHM_STATE)
 typedef struct {
-    unsigned short width;                 // Ancho
-    unsigned short height;                // Alto
-    unsigned int   num_players;           // Cantidad de jugadores
-    player_t       players[MAX_PLAYERS];  // Lista de jugadores
-    bool           game_over;             // Terminado?
-    int            board[];               // Tablero: ints fila-0, fila-1, ...
+    unsigned short width;
+    unsigned short height;
+    unsigned int   num_players;
+    player_t       players[MAX_PLAYERS];
+    bool           game_over;
+    int            board[]; // flexible array: ints fila-0 a fila-(H-1)
 } state_t;
 
-// Sincronización (SHM_SYNC)
+// sincronizacion (SHM_SYNC)
 typedef struct {
-    sem_t A;                // master -> vista: hay cambios
-    sem_t B;                // vista  -> master: terminé de imprimir
-    sem_t C;                // mutex para evitar inanición del master
-    sem_t D;                // mutex para el estado del juego
-    sem_t E;                // mutex para variable readers
+    sem_t A;                // master -> view: hay cambios
+    sem_t B;                // view  -> master: termine
+    sem_t C;                // turnstile (no usado en version simple)
+    sem_t D;                // mutex escritor del estado
+    sem_t E;                // mutex readers
     unsigned int F;         // cantidad de lectores
-    sem_t G[MAX_PLAYERS];   // un semáforo por jugador
+    sem_t G[MAX_PLAYERS];   // gate por jugador
 } sync_t;
 
 #endif // SHAREDHEADERS_H

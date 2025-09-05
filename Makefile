@@ -1,124 +1,94 @@
-# =========================
-# Config detección de SO
-# =========================
+# ===== deteccion de SO =====
 UNAME_S := $(shell uname -s)
 
 CC      := gcc
-CFLAGS  := -Wall -Wextra -g -O0 -Iinclude -MMD -MP
+CFLAGS  := -Wall -Wextra -Wconversion -Wshadow -Wformat=2 -g -O0 -Iinclude -MMD -MP -D_POSIX_C_SOURCE=200809L
 LDLIBS  := -pthread -lm
-ifeq ($(UNAME_S),Linux)          # Docker / Linux (imagen oficial)
+ifeq ($(UNAME_S),Linux)          # Docker / Linux
   LDLIBS += -lrt                 # librt en Linux
-else                             # macOS (solo por conveniencia local)
+else                             # macOS (solo conveniencia local)
   CFLAGS += -Wno-deprecated-declarations
 endif
 
-# ncurses sólo para la vista
 LIBS_VIEW := -lncurses
 
-# =========================
-# Rutas y archivos
-# =========================
-SRC_DIR := src
-BIN_DIR := bin
+# ===== carpetas =====
+SRCDIR := src
+INCDIR := include
+BINDIR := bin
+OBJDIR := obj
 
-SRCS_COMMON := $(SRC_DIR)/ipc.c
-OBJS_COMMON := $(SRCS_COMMON:.c=.o)
+# ===== fuentes =====
+COMMON_SRCS := $(SRCDIR)/ipc.c
+MASTER_SRCS := $(SRCDIR)/master.c
+PLAYER_SRCS := $(SRCDIR)/player.c
+VIEW_SRCS   := $(SRCDIR)/view.c
+TOOL_SRCS   := $(SRCDIR)/shm_tool.c
+DEMO2_SRCS  := $(SRCDIR)/demo2.c
 
-MASTER := $(BIN_DIR)/master
-VIEW   := $(BIN_DIR)/view
-PLAYER := $(BIN_DIR)/player
-SHMTOOL:= $(BIN_DIR)/shm_tool
+COMMON_OBJS := $(COMMON_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+MASTER_OBJS := $(MASTER_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+PLAYER_OBJS := $(PLAYER_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+VIEW_OBJS   := $(VIEW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+TOOL_OBJS   := $(TOOL_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+DEMO2_OBJS  := $(DEMO2_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 
-# =========================
-# Docker (host)
-# =========================
-IMAGE := agodio/itba-so-multi-platform:3.0
-CONTAINER_NAME := itba-so-tp1
+DEPS := $(COMMON_OBJS:.o=.d) $(MASTER_OBJS:.o=.d) $(PLAYER_OBJS:.o=.d) $(VIEW_OBJS:.o=.d) $(TOOL_OBJS:.o=.d) $(DEMO2_OBJS:.o=.d)
 
-.PHONY: docker deps build all clean demo demo_view run_master destroy_shm check_term
+# ===== targets =====
+.PHONY: all build clean distclean docker deps run-demo demo2
 
-docker:
-	@echo ">> Lanzando contenedor $(CONTAINER_NAME) con imagen $(IMAGE)"
-	docker run --rm -it --name $(CONTAINER_NAME) -v "$$(pwd)":/work -w /work $(IMAGE) bash
-
-# =========================
-# Build
-# =========================
 all: build
 
-build: $(BIN_DIR) $(MASTER) $(VIEW) $(PLAYER) $(SHMTOOL)
+build: $(BINDIR)/master $(BINDIR)/player $(BINDIR)/view $(BINDIR)/shm_tool
+	@echo "✔ build ok"
 
-$(BIN_DIR):
-	mkdir -p $(BIN_DIR)
+$(BINDIR)/master: $(COMMON_OBJS) $(MASTER_OBJS) | $(BINDIR)
+	$(CC) $^ -o $@ $(LDLIBS)
 
-$(MASTER): $(SRC_DIR)/master.c $(OBJS_COMMON) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+$(BINDIR)/player: $(COMMON_OBJS) $(PLAYER_OBJS) | $(BINDIR)
+	$(CC) $^ -o $@ $(LDLIBS)
 
-$(VIEW): $(SRC_DIR)/view.c $(OBJS_COMMON) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS) $(LIBS_VIEW)
+$(BINDIR)/view: $(COMMON_OBJS) $(VIEW_OBJS) | $(BINDIR)
+	$(CC) $^ -o $@ $(LDLIBS) $(LIBS_VIEW)
 
-$(PLAYER): $(SRC_DIR)/player.c $(OBJS_COMMON) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+$(BINDIR)/shm_tool: $(COMMON_OBJS) $(TOOL_OBJS) | $(BINDIR)
+	$(CC) $^ -o $@ $(LDLIBS)
 
-$(SHMTOOL): $(SRC_DIR)/shm_tool.c $(OBJS_COMMON) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+$(BINDIR)/demo2: $(DEMO2_OBJS) | $(BINDIR)
+	$(CC) $^ -o $@ $(LIBS_VIEW)
 
-# =========================
-# Deps (dentro del contenedor)
-# =========================
-deps:
-	@echo ">> Instalando dependencias (ncurses)..."
-	@apt-get update -y >/dev/null && apt-get install -y --no-install-recommends \
-	  libncurses5-dev libncursesw5-dev ncurses-term >/dev/null && echo "✔ ncurses instalado"
+$(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# =========================
-# Helpers de ejecución
-# =========================
-SAFE_TERM := $(shell sh -c 't="$${TERM:-xterm-256color}"; echo "$$t" | sed s/_/-/g')
+$(BINDIR) $(OBJDIR):
+	mkdir -p $@
 
-W ?= 20
-H ?= 20
-S ?= 100
-NPLAYERS ?= 2
-STEP_MS ?= 100
-
-destroy_shm: build
-	$(SHMTOOL) destroy || true
-
-check_term:
-	@echo ">> TERM del entorno: '$(TERM)'  -> usando normalizado: '$(SAFE_TERM)'"
-	@infocmp $(SAFE_TERM) >/dev/null 2>&1 && echo "✔ terminfo OK para $(SAFE_TERM)" || echo "✖ terminfo NO encontrada (instalar ncurses-term)"
-
-demo: build
-	@echo ">> Demo: W=$(W) H=$(H) S=$(S)s NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS)ms"
-	@echo ">> Usando TERM=$(SAFE_TERM)"
-	@env TERM=$(SAFE_TERM) NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS) $(MASTER) $(W) $(H) $(S)
-
-demo_view: demo
-
-run_master: build
-	@echo ">> Ejecutando master con: $(ARGS) | NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS)ms"
-	@echo ">> Usando TERM=$(SAFE_TERM)"
-	@env TERM=$(SAFE_TERM) NPLAYERS=$(NPLAYERS) STEP_MS=$(STEP_MS) $(MASTER) $(ARGS)
-
-# =========================
-# Limpieza
-# =========================
 clean:
-	rm -f $(SRC_DIR)/*.o $(SRC_DIR)/*.d $(BIN_DIR)/*
+	rm -rf $(OBJDIR)
 	@echo "✔ clean"
 
-#=========================
-# Demo 2 (local, no en Docker)
-#=========================
+distclean: clean
+	rm -rf $(BINDIR)
 
-bin/demo2: src/demo2.c
-	$(CC) $(CFLAGS) -o bin/demo2 src/demo2.c -lncurses
-
-demo2: bin/demo2 bin/master bin/player bin/view
-	./bin/demo2
-
-
+# instala ncurses (debian/ubuntu). en docker de la catedra ya viene.
+deps:
+	@echo ">> Instalando dependencias (ncurses)..."
+	@apt-get update -y
+	@DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libncurses-dev
+	@echo "✔ ncurses instalado"
 
 
--include $(SRC_DIR)/*.d
+# ejemplo rapido
+run-demo: build
+	NPLAYERS=3 STEP_MS=300 $(BINDIR)/master 20 12 10
+
+# compilar y correr demo2
+demo2: $(BINDIR)/demo2
+	$(BINDIR)/demo2
+
+# correr en docker (imagen multi plataforma de la catedra)
+docker:
+	docker run --rm -it -v "$$PWD":/work -w /work agodio/itba-so-multi-platform:3.0 bash
+
+-include $(DEPS)
