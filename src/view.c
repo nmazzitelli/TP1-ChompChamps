@@ -31,6 +31,18 @@ static inline int pair_for_player(int id){
     return p;
 }
 
+// para saber si un jugador tiene alguna celda muerta
+static int player_has_dead(const state_t *st, int i){
+    int W = st->width, H = st->height;
+    for (int y=0; y<H; ++y){
+        for (int x=0; x<W; ++x){
+            int v = st->board[idx_xy(x,y,W)];
+            if (is_dead(v) && id_from_dead(v) == i) return 1;
+        }
+    }
+    return 0;
+}
+
 // dibuja tablero
 static void draw_board(WINDOW *win, const state_t *st){
     int W = st->width, H = st->height;
@@ -73,9 +85,38 @@ static void draw_board(WINDOW *win, const state_t *st){
     wnoutrefresh(win);
 }
 
+// dibuja panel de jugadores (scoreboard)
+static void draw_players(WINDOW *win, const state_t *st){
+    werase(win);
+    box(win, 0, 0);
+
+    mvwprintw(win, 0, 2, " jugadores ");
+
+    int row = 1;
+    for (unsigned i=0; i<st->num_players; ++i){
+        const player_t *p = &st->players[i];
+        int pair = pair_for_player((int)i);
+
+        wattron(win, COLOR_PAIR(pair) | A_BOLD);
+        mvwprintw(win, row, 2, "[%u] %s", i, p->name[0] ? p->name : "P?");
+        wattroff(win, COLOR_PAIR(pair) | A_BOLD);
+
+        mvwprintw(win, row, 18, "sc=%u v=%u inv=%u", p->score, p->v_moves, p->inv_moves);
+        mvwprintw(win, row+1, 4, "pos=(%u,%u) %s%s",
+                  p->pos_x, p->pos_y,
+                  p->blocked ? "blk" : "ok",
+                  player_has_dead(st, (int)i) ? " dead" : "");
+        row += 2;
+        if (row+1 >= getmaxy(win)) break;
+    }
+
+    wnoutrefresh(win);
+}
+
 // ui principal
 static void draw_ui(const state_t *st){
     int term_h, term_w; getmaxyx(stdscr, term_h, term_w);
+    (void)term_h; // saca el warning
     int W = st->width, H = st->height;
 
     attron(COLOR_PAIR(10));
@@ -83,27 +124,48 @@ static void draw_ui(const state_t *st){
              W, H, st->num_players, st->game_over);
     attroff(COLOR_PAIR(10));
 
-    // tamano del tablero en terminal
     int cell_w = 2;
     int bw = 2 + W*cell_w;
     int bh = 2 + H;
 
-    // centrar
-    int start_y = 2 + (term_h - (bh+2) > 0 ? (term_h - (bh+2))/2 : 0);
-    int start_x = (term_w - bw)/2;
+    int sw = 42;
+    int sh = (int)(2 + (int)st->num_players * 2 + 1);
+
+    int margin_top = 2;
+    int start_y = margin_top;
+    int start_x_board = 2;
+
+    int start_x_panel = start_x_board + bw + 2;
+    int start_y_panel = start_y;
+
+    bool side_by_side = (start_x_panel + sw <= term_w - 1);
+    if (!side_by_side){
+        start_x_panel = start_x_board;
+        start_y_panel = start_y + bh + 1;
+    }
 
     static WINDOW *board_win = NULL;
+    static WINDOW *panel_win = NULL;
     static int last_w = 0, last_h = 0;
+
     if (!board_win || last_w != W || last_h != H){
         if (board_win) delwin(board_win);
-        board_win = newwin(bh, bw, start_y, start_x);
+        board_win = newwin(bh, bw, start_y, start_x_board);
         last_w = W; last_h = H;
     } else {
-        mvwin(board_win, start_y, start_x);
+        mvwin(board_win, start_y, start_x_board);
         wresize(board_win, bh, bw);
     }
 
+    if (!panel_win){
+        panel_win = newwin(sh, sw, start_y_panel, start_x_panel);
+    } else {
+        mvwin(panel_win, start_y_panel, start_x_panel);
+        wresize(panel_win, sh, sw);
+    }
+
     draw_board(board_win, st);
+    draw_players(panel_win, st);
     doupdate();
 }
 
@@ -117,7 +179,7 @@ int main(void){
     curs_set(0);
     if (has_colors()) init_colors();
 
-    for (;;){
+    while (1){
         // esperar cambio de estado
         sem_wait(&sy->A);
 

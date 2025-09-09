@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <sys/select.h>
+#include <stdint.h>
 #include "ipc.h"
 #include "rwsem.h"
 
@@ -31,9 +32,11 @@ static int read_env_step_ms(void){
     if (end && *end != '\0') return 400;
     return clamp((int)ms, 0, 5000);
 }
-static unsigned long now_ms(void){
+static uint64_t now_ms(void){
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (unsigned long)ts.tv_sec*1000UL + (unsigned long)(ts.tv_nsec/1000000UL);
+    uint64_t sec  = (uint64_t)ts.tv_sec;
+    uint64_t nsec = (uint64_t)ts.tv_nsec;
+    return sec*1000u + nsec/1000000u;
 }
 static void sleep_ms(int ms){
     if (ms<=0) return;
@@ -49,8 +52,7 @@ static void board_fill_random(state_t *st){
             st->board[idx_xy(x,y,W)] = 1 + (rand() % 9);
 }
 
-static void distribute_positions(int n, int W, int H, int *posx, int *posy){
-    // coloca jugadores mas o menos separados en grilla R x C
+static void distribute_positions(int n, int W, int H, int *px, int *py){
     int R = 1; while (R*R < n) R++;
     int C = (n + R - 1) / R;
     int stepX = (C > 0) ? (W / (C + 1)) : W;
@@ -60,7 +62,7 @@ static void distribute_positions(int n, int W, int H, int *posx, int *posy){
         for (int c=0; c<C && k<n; ++c){
             int x = (c + 1) * stepX; if (x<0) x=0; if (x>=W) x=W-1;
             int y = (r + 1) * stepY; if (y<0) y=0; if (y>=H) y=H-1;
-            posx[k]=x; posy[k]=y; ++k;
+            px[k]=x; py[k]=y; ++k;
         }
 }
 
@@ -89,10 +91,8 @@ static void launch_players(int n, int p_rd[], pid_t pids[]){
         if (c == 0){
             // hijo jugador: su stdout es el pipe
             close(rd);
-            if (wr != STDOUT_FILENO){
-                if (dup2(wr, STDOUT_FILENO) < 0){ perror("dup2"); _exit(127); }
-                close(wr);
-            }
+            if (dup2(wr, STDOUT_FILENO) < 0){ perror("dup2"); _exit(127); }
+            if (wr != STDOUT_FILENO) close(wr);
             char idxbuf[16]; snprintf(idxbuf, sizeof(idxbuf), "%d", i);
             execlp("./bin/player", "player", idxbuf, NULL);
             perror("exec player"); _exit(127);
@@ -133,8 +133,8 @@ static bool any_free_adjacent(const state_t *st, int x0, int y0){
 
 // round-robin
 static void run_round_robin(state_t *st, sync_t *sy,
-                            int nplayers, int step_ms, unsigned long deadline_ms,
-                            int posx[], int posy[], int p_rd[], pid_t pids[]){
+                            int nplayers, int step_ms, uint64_t deadline_ms,
+                            int px[], int py[], int p_rd[], pid_t pids[]){
     bool active_fd[MAX_PLAYERS]; for (int i=0;i<nplayers;++i) active_fd[i] = (p_rd[i]>=0);
 
     while (now_ms() < deadline_ms){
@@ -145,15 +145,17 @@ static void run_round_robin(state_t *st, sync_t *sy,
             sem_post(&sy->G[i]);
 
             // esperar 1 byte de este jugador hasta step_ms
-            unsigned long turn_deadline = now_ms() + (unsigned long)(step_ms>0?step_ms:0);
+            uint64_t turn_deadline = now_ms() + (uint64_t)(step_ms>0?step_ms:0);
             bool processed = false;
 
             while (now_ms() < turn_deadline){
                 fd_set rfds; FD_ZERO(&rfds);
                 FD_SET(p_rd[i], &rfds);
-                unsigned long now = now_ms();
-                unsigned long remain = (turn_deadline > now) ? (turn_deadline - now) : 0UL;
-                struct timeval tv; tv.tv_sec = (time_t)(remain/1000UL); tv.tv_usec = (suseconds_t)((remain%1000UL)*1000UL);
+                uint64_t now = now_ms();
+                uint64_t remain = (turn_deadline > now) ? (turn_deadline - now) : 0u;
+                struct timeval tv;
+                tv.tv_sec  = (time_t)(remain/1000u);
+                tv.tv_usec = (suseconds_t)((remain%1000u)*1000u);
 
                 int ready = select(p_rd[i] + 1, &rfds, NULL, NULL, &tv);
                 if (ready < 0){ if (errno == EINTR) continue; perror("select"); active_fd[i]=false; close(p_rd[i]); break; }
@@ -162,30 +164,50 @@ static void run_round_robin(state_t *st, sync_t *sy,
                 if (FD_ISSET(p_rd[i], &rfds)){
                     unsigned char dir; ssize_t n = read(p_rd[i], &dir, 1);
                     if (n == 1){
+                        bool moved = false;
+                        bool invalid = false;
+
                         if (dir <= 7){
-                            int nx = posx[i] + DX[dir], ny = posy[i] + DY[dir];
+                            int nx = px[i] + DX[dir], ny = py[i] + DY[dir];
                             if (in_bounds(nx,ny,st->width,st->height)){
                                 int idx_new = idx_xy(nx,ny,st->width);
-                                if (st->board[idx_new] > 0){
-                                    int idx_old = idx_xy(posx[i],posy[i],st->width);
-                                    // mover cabeza: old -> body, new -> head
+                                int val = st->board[idx_new];
+                                if (val > 0){
+                                    int idx_old = idx_xy(px[i],py[i],st->width);
                                     rw_writer_enter(sy);
+                                    st->players[i].v_moves += 1u;
+                                    st->players[i].score += (unsigned int)val;
                                     st->board[idx_old] = CELL_BODY(i);
                                     st->board[idx_new] = CELL_HEAD(i);
                                     st->players[i].pos_x = (unsigned short)nx;
                                     st->players[i].pos_y = (unsigned short)ny;
                                     rw_writer_exit(sy);
 
-                                    posx[i]=nx; posy[i]=ny;
+                                    px[i]=nx; py[i]=ny;
                                     repaint(sy);
-                                    processed = true;
+                                    moved = true;
+                                } else {
+                                    invalid = true;
                                 }
+                            } else {
+                                invalid = true;
                             }
+                        } else {
+                            invalid = true;
                         }
+
+                        if (!moved && invalid){
+                            rw_writer_enter(sy);
+                            st->players[i].inv_moves += 1u;
+                            rw_writer_exit(sy);
+                        }
+
+                        processed = moved;
                         break; // a lo sumo 1 solicitud por turno
                     } else if (n == 0){
                         // EOF: jugador bloqueado/muerto
                         rw_writer_enter(sy);
+                        st->players[i].blocked = true;
                         mark_head_dead(st, i);
                         rw_writer_exit(sy);
                         repaint(sy);
@@ -197,10 +219,11 @@ static void run_round_robin(state_t *st, sync_t *sy,
                 }
             }
 
-            // si no proceso y no hay libres adyacentes, marcar muerto
+            // si no proceso y no hay libres adyacentes, marcar muerto y bloquear
             if (active_fd[i] && !processed){
-                if (!any_free_adjacent(st, posx[i], posy[i])){
+                if (!any_free_adjacent(st, px[i], py[i])){
                     rw_writer_enter(sy);
+                    st->players[i].blocked = true;
                     mark_all_dead_of(st, i);
                     rw_writer_exit(sy);
                     repaint(sy);
@@ -213,12 +236,10 @@ static void run_round_robin(state_t *st, sync_t *sy,
             if (processed && step_ms > 0) sleep_ms(step_ms);
         }
 
-        // si todos inactivos, salir
         bool any = false; for (int i=0;i<nplayers;++i) if (active_fd[i]) { any=true; break; }
         if (!any) break;
     }
 
-    // finalizar juego
     rw_writer_enter(sy);
     st->game_over = true;
     rw_writer_exit(sy);
@@ -235,7 +256,6 @@ int main(int argc, char **argv){
     int nplayers = read_env_nplayers();
     int step_ms  = read_env_step_ms();
 
-    // crear/abrir shm
     bool existed_state=false, created_sync=false;
     state_t *st = ipc_create_and_map_state(W, H, &existed_state);
     if (!st){ perror("master: create state"); return 1; }
@@ -247,15 +267,14 @@ int main(int argc, char **argv){
 
     srand((unsigned)time(NULL));
 
-    // estado inicial
     rw_writer_enter(sy);
     st->width = W; st->height = H;
     st->num_players = (unsigned int)nplayers;
     st->game_over = false;
     for (unsigned i=0;i<st->num_players;++i){
-        st->players[i].score = 0;
-        st->players[i].inv_moves = 0;
-        st->players[i].v_moves = 0;
+        st->players[i].score = 0u;
+        st->players[i].inv_moves = 0u;
+        st->players[i].v_moves = 0u;
         st->players[i].blocked = false;
         st->players[i].player_pid = 0;
         st->players[i].name[0] = '\0';
@@ -263,26 +282,28 @@ int main(int argc, char **argv){
     board_fill_random(st);
     rw_writer_exit(sy);
 
-    // lanzar vista y jugadores
     pid_t pid_view = launch_view();
     if (pid_view < 0){ perror("fork view"); ipc_unmap_sync(sy); ipc_unmap_state(st); return 1; }
 
     int p_rd[MAX_PLAYERS]; pid_t pids[MAX_PLAYERS]; memset(pids,0,sizeof(pids));
     launch_players(nplayers, p_rd, pids);
 
-    // posiciones iniciales y cabezas
-    int posx[MAX_PLAYERS], posy[MAX_PLAYERS];
-    distribute_positions(nplayers, (int)W, (int)H, posx, posy);
-    rw_writer_enter(sy); paint_initial_heads(st, nplayers, posx, posy); rw_writer_exit(sy);
+    rw_writer_enter(sy);
+    for (int i=0;i<nplayers;++i){
+        snprintf(st->players[i].name, NAME_LEN, "P%d", i);
+        st->players[i].player_pid = pids[i];
+    }
+    rw_writer_exit(sy);
 
-    // primera impresion
+    int px[MAX_PLAYERS], py[MAX_PLAYERS];
+    distribute_positions(nplayers, (int)W, (int)H, px, py);
+    rw_writer_enter(sy); paint_initial_heads(st, nplayers, px, py); rw_writer_exit(sy);
+
     repaint(sy);
 
-    // bucle principal round-robin con timeout global
-    unsigned long end_at = now_ms() + (unsigned long)(seconds_visible>0?seconds_visible:10)*1000UL;
-    run_round_robin(st, sy, nplayers, step_ms, end_at, posx, posy, p_rd, pids);
+    uint64_t end_at = now_ms() + (uint64_t)(seconds_visible>0?seconds_visible:10)*1000u;
+    run_round_robin(st, sy, nplayers, step_ms, end_at, px, py, p_rd, pids);
 
-    // cerrar pipes y esperar hijos
     for (int i=0;i<nplayers;++i){ if (p_rd[i]>=0) close(p_rd[i]); }
     for (int i=0;i<nplayers;++i){ if (pids[i]>0){ int stc=0; waitpid(pids[i], &stc, 0); } }
     if (pid_view>0){ int stv=0; waitpid(pid_view, &stv, 0); }

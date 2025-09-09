@@ -7,7 +7,7 @@
 #define NUM_OPTIONS 5
 
 int main(void) {
-    int values[NUM_OPTIONS] = {20, 15, 10, 2, 500}; // defaults: W,H,S,N,STEP_MS
+    int values[NUM_OPTIONS] = {20, 20, 100, 2, 100}; // defaults: W,H,S,N,STEP_MS
     const char *labels[NUM_OPTIONS] = {
         "Ancho del tablero (W)",
         "Alto del tablero (H)",
