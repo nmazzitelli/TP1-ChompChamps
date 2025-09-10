@@ -140,6 +140,7 @@ static bool any_free_adjacent(const state_t *st, int x0, int y0){
     return false;
 }
 
+// c
 static void run_round_robin(state_t *st, sync_t *sy,
     int nplayers, int step_ms, int timeout_s,
     int px[], int py[], int p_rd[], pid_t pids[])
@@ -148,127 +149,164 @@ static void run_round_robin(state_t *st, sync_t *sy,
     for (int i = 0; i < nplayers; ++i)
         active_fd[i] = (p_rd[i] >= 0);
 
-    /* last time a valid move happened */
     uint64_t last_valid_ms = now_ms();
 
     while (true) {
-        /* stop if inactivity timeout reached */
+        /* stop on inactivity timeout */
         if (timeout_s > 0 && (now_ms() - last_valid_ms >= (uint64_t)timeout_s * 1000u))
             break;
 
+        /* enable all active players (one token each) */
         for (int i = 0; i < nplayers; ++i) {
             if (!active_fd[i]) continue;
-
-            /* habilitar 1 envio */
             sem_post(&sy->G[i]);
+        }
 
-            uint64_t turn_deadline = now_ms() + (uint64_t)(step_ms > 0 ? step_ms : 0);
-            bool processed = false;
+        /* build fd_set with active pipes */
+        fd_set rfds; FD_ZERO(&rfds);
+        int maxfd = -1;
+        int any_active = 0;
+        for (int i = 0; i < nplayers; ++i) {
+            if (!active_fd[i]) continue;
+            FD_SET(p_rd[i], &rfds);
+            if (p_rd[i] > maxfd) maxfd = p_rd[i];
+            any_active = 1;
+        }
+        if (!any_active) break;
 
-            while (now_ms() < turn_deadline) {
-                fd_set rfds; FD_ZERO(&rfds);
-                FD_SET(p_rd[i], &rfds);
-                uint64_t now = now_ms();
-                uint64_t remain = (turn_deadline > now) ? (turn_deadline - now) : 0u;
-                struct timeval tv;
-                tv.tv_sec  = (time_t)(remain / 1000u);
-                tv.tv_usec = (suseconds_t)((remain % 1000u) * 1000u);
+        /* select timeout from step_ms */
+        struct timeval tv;
+        tv.tv_sec = (time_t)((step_ms > 0) ? (step_ms / 1000) : 0);
+        tv.tv_usec = (suseconds_t)((step_ms > 0) ? ((step_ms % 1000) * 1000) : 0);
 
-                int ready = select(p_rd[i] + 1, &rfds, NULL, NULL, &tv);
-                if (ready < 0) {
-                    if (errno == EINTR) continue;
-                    perror("select");
-                    active_fd[i] = false; close(p_rd[i]);
-                    break;
-                }
-                if (ready == 0) break;
+        int ready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            perror("select");
+            /* fatal select error: deactivate all */
+            for (int i = 0; i < nplayers; ++i) {
+                if (active_fd[i]) { active_fd[i] = false; if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; } }
+            }
+            break;
+        }
 
-                if (FD_ISSET(p_rd[i], &rfds)) {
-                    unsigned char dir; ssize_t n = read(p_rd[i], &dir, 1);
-                    if (n == 1) {
-                        bool moved = false, invalid = false;
+        bool processed[MAX_PLAYERS] = {0};
+        bool any_valid_this_cycle = false;
 
-                        if (dir <= 7) {
-                            int nx = px[i] + DX[dir], ny = py[i] + DY[dir];
-                            if (in_bounds(nx, ny, st->width, st->height)) {
-                                int idx_new = idx_xy(nx, ny, st->width);
-                                int val = st->board[idx_new];
-                                if (val > 0) {
-                                    int idx_old = idx_xy(px[i], py[i], st->width);
-                                    rw_writer_enter(sy);
-                                    st->players[i].v_moves += 1u;
-                                    st->players[i].score += (unsigned int)val;
-                                    st->board[idx_old] = CELL_BODY(i);
-                                    st->board[idx_new] = CELL_HEAD(i);
-                                    st->players[i].pos_x = (unsigned short)nx;
-                                    st->players[i].pos_y = (unsigned short)ny;
-                                    rw_writer_exit(sy);
+        if (ready > 0) {
+            /* handle every ready player */
+            for (int i = 0; i < nplayers; ++i) {
+                if (!active_fd[i]) continue;
+                if (!FD_ISSET(p_rd[i], &rfds)) continue;
 
-                                    px[i] = nx; py[i] = ny;
-                                    repaint(sy);
-                                    moved = true;
+                unsigned char dir;
+                ssize_t r = read(p_rd[i], &dir, 1);
+                if (r == 1) {
+                    bool moved = false;
+                    if (dir <= 7) {
+                        int W = st->width, H = st->height;
+                        int nx = px[i] + DX[dir];
+                        int ny = py[i] + DY[dir];
 
-                                    /* update last valid move time */
-                                    last_valid_ms = now_ms();
-                                } else invalid = true;
-                            } else invalid = true;
-                        } else invalid = true;
+                        if (in_bounds(nx, ny, W, H)) {
+                            int idx_new = idx_xy(nx, ny, W);
+                            int val = st->board[idx_new];
 
-                        if (!moved && invalid) {
+                            if (val > 0) {
+                                /* valid move: update shm, local pos, stats, repaint, reset timeout */
+                                rw_writer_enter(sy);
+                                st->players[i].v_moves++;
+                                st->players[i].score += (unsigned int)val;
+                                int idx_old = idx_xy(px[i], py[i], W);
+                                st->board[idx_old] = CELL_BODY(i);
+                                st->board[idx_new] = CELL_HEAD(i);
+                                /* update shm pos */
+                                st->players[i].pos_x = (unsigned short)nx;
+                                st->players[i].pos_y = (unsigned short)ny;
+                                rw_writer_exit(sy);
+
+                                /* update local px/py so future calculations use new pos */
+                                px[i] = nx;
+                                py[i] = ny;
+
+                                repaint(sy);
+                                last_valid_ms = now_ms();
+                                moved = true;
+                            } else {
+                                /* invalid target (not free) */
+                                rw_writer_enter(sy);
+                                st->players[i].inv_moves++;
+                                rw_writer_exit(sy);
+                            }
+                        } else {
+                            /* out of bounds -> invalid */
                             rw_writer_enter(sy);
-                            st->players[i].inv_moves += 1u;
+                            st->players[i].inv_moves++;
                             rw_writer_exit(sy);
                         }
-
-                        /* only consider processed if a valid move happened */
-                        processed = moved;
-                        break; /* a lo sumo 1 solicitud por turno */
-                    } else if (n == 0) {
-                        /* EOF: jugador bloqueado/muerto */
-                        rw_writer_enter(sy);
-                        st->players[i].blocked = true;
-                        mark_head_dead(st, i);
-                        rw_writer_exit(sy);
-                        repaint(sy);
-                        active_fd[i] = false; close(p_rd[i]); break;
                     } else {
-                        if (errno == EINTR) continue;
-                        active_fd[i] = false; close(p_rd[i]); break;
+                        /* invalid dir -> count as invalid */
+                        rw_writer_enter(sy);
+                        st->players[i].inv_moves++;
+                        rw_writer_exit(sy);
                     }
-                }
-            }
 
-            /* si no proceso y no hay libres adyacentes, marcar muerto y bloquear */
-            if (active_fd[i] && !processed) {
-                if (!any_free_adjacent(st, px[i], py[i])) {
+                    processed[i] = moved;
+                    any_valid_this_cycle = any_valid_this_cycle || moved;
+                } else if (r == 0) {
+                    /* eof: player closed -> mark head dead and block */
                     rw_writer_enter(sy);
                     st->players[i].blocked = true;
-                    mark_all_dead_of(st, i);
+                    mark_head_dead(st, i);
                     rw_writer_exit(sy);
                     repaint(sy);
                     active_fd[i] = false;
-                    if (p_rd[i] >= 0){ close(p_rd[i]); p_rd[i] = -1; }
-                    if (pids[i] > 0){ kill(pids[i], SIGTERM); }
+                    if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
+                } else {
+                    if (errno == EINTR) {
+                        /* transient, try later */
+                        continue;
+                    }
+                    /* read error: deactivate player */
+                    active_fd[i] = false;
+                    if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
                 }
             }
-
-            if (processed && step_ms > 0) sleep_ms(step_ms);
         }
 
-        /* stop if no active players remain */
+        /* players enabled but not processed: if no free adjacent -> kill them */
+        for (int i = 0; i < nplayers; ++i) {
+            if (!active_fd[i]) continue;
+            if (processed[i]) continue;
+            if (!any_free_adjacent(st, px[i], py[i])) {
+                rw_writer_enter(sy);
+                st->players[i].blocked = true;
+                mark_all_dead_of(st, i);
+                rw_writer_exit(sy);
+                repaint(sy);
+                active_fd[i] = false;
+                if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
+                if (pids[i] > 0) { kill(pids[i], SIGTERM); }
+            }
+        }
+
+        /* pacing: if any valid moves happened, allow small sleep */
+        if (any_valid_this_cycle && step_ms > 0) sleep_ms(step_ms);
+
+        /* stop if no active players left */
         bool any = false;
-        for (int i = 0; i < nplayers; ++i)
-            if (active_fd[i]) { any = true; break; }
+        for (int i = 0; i < nplayers; ++i) if (active_fd[i]) { any = true; break; }
         if (!any) break;
     }
 
-    /* marcar fin de juego, despertar a todos y repintar */
+    /* end game: mark over, wake gates and repaint */
     rw_writer_enter(sy);
     st->game_over = true;
     rw_writer_exit(sy);
     for (int i = 0; i < nplayers; ++i) sem_post(&sy->G[i]);
     repaint(sy);
 }
+
 
 static const char* color_name_for_player(unsigned i){
     /* map id % 8 to color names (matches view init_colors / pair_for_player) */
