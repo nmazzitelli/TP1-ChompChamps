@@ -6,9 +6,23 @@
 
 #define NUM_OPTIONS 5
 
+/* ranges (match master limits) */
+static const int MIN_W = 10;
+static const int MAX_W = 65535;
+static const int MIN_H = 10;
+static const int MAX_H = 65535;
+static const int S_MIN = 0;
+static const int S_MAX = 3600;
+static const int N_MIN = 1;
+static const int N_MAX = 9;       // MAX_PLAYERS in the project
+static const int STEP_MIN = 0;
+static const int STEP_MAX = 5000;
+
+static int clamp_int(int v, int lo, int hi){ if (v < lo) return lo; if (v > hi) return hi; return v; }
+
 int main(void) {
-    int values[NUM_OPTIONS] = {20, 20, 100, 2, 100}; // defaults: W,H,S,N,STEP_MS
-    const char *labels[NUM_OPTIONS] = {
+    int values[NUM_OPTIONS] = {20, 20, 10, 2, 10}; // defaults: W,H,S,N,STEP_MS
+    const char *base_labels[NUM_OPTIONS] = {
         "Ancho del tablero (W)",
         "Alto del tablero (H)",
         "Tiempo visible (S, seg)",
@@ -33,7 +47,19 @@ int main(void) {
             if (i == highlight) {
                 attron(A_REVERSE);
             }
-            mvprintw(3 + i, 2, "%s: %d", labels[i], values[i]);
+
+            /* compute range display per option */
+            int lo = 0, hi = 0;
+            switch (i) {
+                case 0: lo = MIN_W; hi = MAX_W; break;
+                case 1: lo = MIN_H; hi = MAX_H; break;
+                case 2: lo = S_MIN; hi = S_MAX; break;
+                case 3: lo = N_MIN; hi = N_MAX; break;
+                case 4: lo = STEP_MIN; hi = STEP_MAX; break;
+            }
+
+            mvprintw(3 + i, 2, "%s [%d..%d]: %d", base_labels[i], lo, hi, values[i]);
+
             if (i == highlight) {
                 attroff(A_REVERSE);
             }
@@ -48,17 +74,42 @@ int main(void) {
             highlight = (highlight + 1) % NUM_OPTIONS;
         } else if (ch == '\n') {
             echo();
-            mvprintw(10, 0, "Ingrese nuevo valor para %s: ", labels[highlight]);
+            mvprintw(10, 0, "Ingrese nuevo valor para %s [%d..%d]: ",
+                     base_labels[highlight],
+                     (highlight==0?MIN_W : (highlight==1?MIN_H : (highlight==2?S_MIN : (highlight==3?N_MIN:STEP_MIN)))),
+                     (highlight==0?MAX_W : (highlight==1?MAX_H : (highlight==2?S_MAX : (highlight==3?N_MAX:STEP_MAX))))
+                     );
             refresh();
-            scanw("%d", &values[highlight]);
+            int v = values[highlight];
+            if (scanw("%d", &v) == 1) {
+                /* clamp according to option */
+                switch (highlight) {
+                    case 0: v = clamp_int(v, MIN_W, MAX_W); break;
+                    case 1: v = clamp_int(v, MIN_H, MAX_H); break;
+                    case 2: v = clamp_int(v, S_MIN, S_MAX); break;
+                    case 3: v = clamp_int(v, N_MIN, N_MAX); break;
+                    case 4: v = clamp_int(v, STEP_MIN, STEP_MAX); break;
+                }
+                values[highlight] = v;
+                mvprintw(11, 0, "valor seteado a %d (rango aplicado)", v);
+            } else {
+                mvprintw(11, 0, "entrada invalida, se mantiene %d", values[highlight]);
+            }
             noecho();
+            refresh();
+            napms(700);
         } else if (ch == 'r') {
-            // Minimal validations
-            if (values[0] < 10) values[0] = 10;
-            if (values[1] < 10) values[1] = 10;
-            if (values[3] < 1) values[3] = 1;
-            if (values[3] > 9) values[3] = 9;
-            if (values[4] < 0) values[4] = 0;
+            // Minimal validations / clamp again before run
+            if (values[0] < MIN_W) values[0] = MIN_W;
+            if (values[0] > MAX_W) values[0] = MAX_W;
+            if (values[1] < MIN_H) values[1] = MIN_H;
+            if (values[1] > MAX_H) values[1] = MAX_H;
+            if (values[2] < S_MIN) values[2] = S_MIN;
+            if (values[2] > S_MAX) values[2] = S_MAX;
+            if (values[3] < N_MIN) values[3] = N_MIN;
+            if (values[3] > N_MAX) values[3] = N_MAX; // master supports up to 9 players
+            if (values[4] < STEP_MIN) values[4] = STEP_MIN;
+            if (values[4] > STEP_MAX) values[4] = STEP_MAX;
 
             // Export env if you still want them (optional)
             char buf[32];

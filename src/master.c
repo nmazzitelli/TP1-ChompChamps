@@ -140,7 +140,6 @@ static bool any_free_adjacent(const state_t *st, int x0, int y0){
     return false;
 }
 
-// round-robin
 static void run_round_robin(state_t *st, sync_t *sy,
     int nplayers, int step_ms, int timeout_s,
     int px[], int py[], int p_rd[], pid_t pids[])
@@ -149,18 +148,18 @@ static void run_round_robin(state_t *st, sync_t *sy,
     for (int i = 0; i < nplayers; ++i)
         active_fd[i] = (p_rd[i] >= 0);
 
-    // track de la ultima jugada valida
+    /* last time a valid move happened */
     uint64_t last_valid_ms = now_ms();
 
     while (true) {
-        // cortar si paso el timeout sin jugadas validas
+        /* stop if inactivity timeout reached */
         if (timeout_s > 0 && (now_ms() - last_valid_ms >= (uint64_t)timeout_s * 1000u))
             break;
 
         for (int i = 0; i < nplayers; ++i) {
             if (!active_fd[i]) continue;
 
-            // habilitar jugador i
+            /* habilitar 1 envio */
             sem_post(&sy->G[i]);
 
             uint64_t turn_deadline = now_ms() + (uint64_t)(step_ms > 0 ? step_ms : 0);
@@ -209,7 +208,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
                                     repaint(sy);
                                     moved = true;
 
-                                    // reset inactivity timer
+                                    /* update last valid move time */
                                     last_valid_ms = now_ms();
                                 } else invalid = true;
                             } else invalid = true;
@@ -221,11 +220,11 @@ static void run_round_robin(state_t *st, sync_t *sy,
                             rw_writer_exit(sy);
                         }
 
-                        // Only mark as processed if it was a valid move
+                        /* only consider processed if a valid move happened */
                         processed = moved;
-                        break; // one play per turn
+                        break; /* a lo sumo 1 solicitud por turno */
                     } else if (n == 0) {
-                        // EOF: player left / blocked
+                        /* EOF: jugador bloqueado/muerto */
                         rw_writer_enter(sy);
                         st->players[i].blocked = true;
                         mark_head_dead(st, i);
@@ -239,7 +238,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
                 }
             }
 
-            // si no jugo y no hay libres, bloquear
+            /* si no proceso y no hay libres adyacentes, marcar muerto y bloquear */
             if (active_fd[i] && !processed) {
                 if (!any_free_adjacent(st, px[i], py[i])) {
                     rw_writer_enter(sy);
@@ -256,18 +255,70 @@ static void run_round_robin(state_t *st, sync_t *sy,
             if (processed && step_ms > 0) sleep_ms(step_ms);
         }
 
+        /* stop if no active players remain */
         bool any = false;
         for (int i = 0; i < nplayers; ++i)
             if (active_fd[i]) { any = true; break; }
         if (!any) break;
     }
 
-    // marcar fin de juego
+    /* marcar fin de juego, despertar a todos y repintar */
     rw_writer_enter(sy);
     st->game_over = true;
     rw_writer_exit(sy);
     for (int i = 0; i < nplayers; ++i) sem_post(&sy->G[i]);
     repaint(sy);
+}
+
+static const char* color_name_for_player(unsigned i){
+    /* map id % 8 to color names (matches view init_colors / pair_for_player) */
+    static const char *names[8] = {
+        "blue", "red", "green", "magenta", "cyan", "yellow", "white", "black"
+    };
+    return names[i % 8];
+}
+
+static void print_results(const state_t *st){
+    /* header */
+    printf("\n=== Resultados ===\n");
+    int winner = -1;
+
+    for (unsigned i = 0; i < st->num_players; ++i){
+        const player_t *p = &st->players[i];
+        const char *col = color_name_for_player(i);
+        /* print player line with color */
+        printf("Jugador %s (PID %d, color=%s): score=%u, validos=%u, invalidos=%u\n",
+               p->name[0] ? p->name : "P?",
+               (int)p->player_pid,
+               col,
+               p->score,
+               p->v_moves,
+               p->inv_moves);
+
+        if (winner < 0){
+            winner = (int)i;
+        } else {
+            const player_t *w = &st->players[winner];
+            /* tie-breakers: score, v_moves, inv_moves (less is better), pid (less is better) */
+            if (p->score > w->score ||
+               (p->score == w->score && p->v_moves > w->v_moves) ||
+               (p->score == w->score && p->v_moves == w->v_moves && p->inv_moves < w->inv_moves) ||
+               (p->score == w->score && p->v_moves == w->v_moves && p->inv_moves == w->inv_moves && p->player_pid < w->player_pid)){
+                winner = (int)i;
+               }
+        }
+    }
+
+    if (winner >= 0){
+        const player_t *w = &st->players[winner];
+        const char *wcol = color_name_for_player((unsigned)winner);
+        printf("\nGanador: %s (PID %d, color=%s)\n",
+               w->name[0] ? w->name : "P?",
+               (int)w->player_pid,
+               wcol);
+    } else {
+        printf("\nGanador: ninguno\n");
+    }
 }
 
 int main(int argc, char **argv){
@@ -395,9 +446,18 @@ int main(int argc, char **argv){
 
     run_round_robin(st, sy, nplayers_cfg, step_ms, timeout, px, py, p_rd, pids);
 
-    for (int i=0;i<nplayers_cfg;++i){ if (p_rd[i]>=0) close(p_rd[i]); }
-    for (int i=0;i<nplayers_cfg;++i){ if (pids[i]>0){ int stc=0; waitpid(pids[i], &stc, 0); } }
-    if (pid_view>0){ int stv=0; waitpid(pid_view, &stv, 0); }
+    for (int i = 0; i < nplayers_cfg; ++i) {
+        if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
+    }
+
+    for (int i = 0; i < nplayers_cfg; ++i) {
+        if (pids[i] > 0) { int stc = 0; waitpid(pids[i], &stc, 0); }
+    }
+
+    if (pid_view > 0) { int stv = 0; waitpid(pid_view, &stv, 0); }
+
+    /* print results after view exited so terminal output is visible */
+    print_results(st);
 
     ipc_unmap_sync(sy);
     ipc_unmap_state(st);
