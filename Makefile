@@ -81,7 +81,8 @@ deps:
 
 # ejemplo rapido
 run-demo: build
-	NPLAYERS=3 STEP_MS=300 $(BINDIR)/master 20 12 10
+	NPLAYERS=2 STEP_MS=1 $(BINDIR)/master -w 20 -h 20 -v $(BINDIR)/view -p $(BINDIR)/player -p $(BINDIR)/player -d 300 -t 10
+
 
 # compilar y correr demo2
 demo2: $(BINDIR)/demo2

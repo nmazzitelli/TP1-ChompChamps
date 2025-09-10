@@ -53,29 +53,46 @@ int main(void) {
             scanw("%d", &values[highlight]);
             noecho();
         } else if (ch == 'r') {
-            // Validaciones mínimas
+            // Minimal validations
             if (values[0] < 10) values[0] = 10;
             if (values[1] < 10) values[1] = 10;
             if (values[3] < 1) values[3] = 1;
             if (values[3] > 9) values[3] = 9;
             if (values[4] < 0) values[4] = 0;
 
-            // Exportamos NPLAYERS y STEP_MS
+            // Export env if you still want them (optional)
             char buf[32];
             snprintf(buf, sizeof(buf), "%d", values[3]);
             setenv("NPLAYERS", buf, 1);
-
             snprintf(buf, sizeof(buf), "%d", values[4]);
             setenv("STEP_MS", buf, 1);
 
-            // Preparamos argumentos para master
-            char wbuf[16], hbuf[16], sbuf[16];
+            // Prepare args for master (use flags and repeated -p)
+            char wbuf[16], hbuf[16], sbuf[16], stepbuf[16];
             snprintf(wbuf, sizeof(wbuf), "%d", values[0]);
             snprintf(hbuf, sizeof(hbuf), "%d", values[1]);
             snprintf(sbuf, sizeof(sbuf), "%d", values[2]);
+            snprintf(stepbuf, sizeof(stepbuf), "%d", values[4]);
 
-            endwin(); // cerramos ncurses antes de exec
-            execlp("./bin/master", "master", wbuf, hbuf, sbuf, (char*)NULL);
+            // build argv vector
+            const char *player_path = "./bin/player";
+            const char *view_path = "./bin/view";
+            char *argv[64];
+            int ai = 0;
+            argv[ai++] = "master";
+            argv[ai++] = "-w"; argv[ai++] = wbuf;
+            argv[ai++] = "-h"; argv[ai++] = hbuf;
+            argv[ai++] = "-v"; argv[ai++] = (char *)view_path;
+            for (int i = 0; i < values[3] && ai + 2 < (int)(sizeof(argv)/sizeof(argv[0])); ++i) {
+                argv[ai++] = "-p";
+                argv[ai++] = (char *)player_path;
+            }
+            argv[ai++] = "-d"; argv[ai++] = stepbuf;
+            argv[ai++] = "-t"; argv[ai++] = sbuf;
+            argv[ai] = NULL;
+
+            endwin(); // close ncurses before exec
+            execvp("./bin/master", argv);
             perror("execlp master");
             exit(1);
         }
