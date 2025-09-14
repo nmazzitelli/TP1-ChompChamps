@@ -36,21 +36,12 @@ static inline bool in_bounds(int x,int y,int W,int H){
     return (0<=x && x<W && 0<=y && y<H);
 }
 
-// celdas
-// libre: 1 a 9
-// cuerpo jugador i: -(i)
-// cabeza jugador i: -(100+i)
-// muerto jugador i: -(200+i)
-#define CELL_BODY(i) (-(i))
-#define CELL_HEAD(i) (-(100 + (i)))
-#define CELL_DEAD(i) (-(200 + (i)))
-
-static inline int is_dead (int v){ return v <= -200; }
-static inline int is_head (int v){ return v <= -100 && v > -200; }
-static inline int is_body (int v){ return v <= 0    && v > -100; }
-static inline int id_from_dead(int v){ return -(200) - v; }
-static inline int id_from_head(int v){ return -(100) - v; }
-static inline int id_from_body(int v){ return -v; }
+// esquema de celdas segun enunciado:
+// libre: 1..9 (recompensa)
+// capturada por jugador id: v = -id, con id en [0..8] => valores en [-8..0]
+static inline int cell_owner(int v){
+    return (v <= 0) ? -v : -1; // -1 => libre
+}
 
 // estado de cada jugador
 typedef struct {

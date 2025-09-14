@@ -8,14 +8,13 @@
 #include <errno.h>
 #include <string.h>
 #include <ncurses.h>
+#include <getopt.h>
 #include "ipc.h"
 #include "rwsem.h"
 
-// init de colores
 static void init_colors(void){
     start_color();
     use_default_colors();
-    // pares basicos
     init_pair(1,  -1, COLOR_BLUE);
     init_pair(2,  -1, COLOR_RED);
     init_pair(3,  -1, COLOR_GREEN);
@@ -35,19 +34,7 @@ static inline int pair_for_player(int id){
     return p;
 }
 
-// para saber si un jugador tiene alguna celda muerta
-static int player_has_dead(const state_t *st, int i){
-    int W = st->width, H = st->height;
-    for (int y=0; y<H; ++y){
-        for (int x=0; x<W; ++x){
-            int v = st->board[idx_xy(x,y,W)];
-            if (is_dead(v) && id_from_dead(v) == i) return 1;
-        }
-    }
-    return 0;
-}
-
-// dibuja tablero
+// board
 static void draw_board(WINDOW *win, const state_t *st){
     int W = st->width, H = st->height;
     int cell_w = 2, off_y = 1, off_x = 1;
@@ -65,20 +52,8 @@ static void draw_board(WINDOW *win, const state_t *st){
                 wattron(win, COLOR_PAIR(9));
                 mvwprintw(win, vy, vx, "%d ", v);
                 wattroff(win, COLOR_PAIR(9));
-            } else if (is_dead(v)){
-                int id = id_from_dead(v);
-                int pair = pair_for_player(id);
-                wattron(win, COLOR_PAIR(pair) | A_BOLD);
-                mvwprintw(win, vy, vx, "xx");
-                wattroff(win, COLOR_PAIR(pair) | A_BOLD);
-            } else if (is_head(v)){
-                int id = id_from_head(v);
-                int pair = pair_for_player(id);
-                wattron(win, COLOR_PAIR(pair) | A_BOLD);
-                mvwprintw(win, vy, vx, "@@");
-                wattroff(win, COLOR_PAIR(pair) | A_BOLD);
             } else {
-                int id = id_from_body(v);
+                int id = (v <= 0) ? -v : -1;
                 int pair = pair_for_player(id);
                 wattron(win, COLOR_PAIR(pair));
                 mvwprintw(win, vy, vx, "  ");
@@ -86,14 +61,27 @@ static void draw_board(WINDOW *win, const state_t *st){
             }
         }
     }
+    // heads: dibujar por encima usando pos_x/pos_y de cada jugador
+    for (unsigned i=0; i<st->num_players; ++i){
+        const player_t *p = &st->players[i];
+        int vx = off_x + p->pos_x * cell_w;
+        int vy = off_y + p->pos_y;
+        int pair = pair_for_player((int)i);
+
+        const char *face = p->blocked ? "xx" : "@@";  // "@@" vivo, "xx" muerto
+
+        wattron(win, COLOR_PAIR(pair) | A_BOLD);
+        mvwprintw(win, vy, vx, "%s", face);
+        wattroff(win, COLOR_PAIR(pair) | A_BOLD);
+    }
+
     wnoutrefresh(win);
 }
 
-// dibuja panel de jugadores (scoreboard)
+// players panel
 static void draw_players(WINDOW *win, const state_t *st){
     werase(win);
     box(win, 0, 0);
-
     mvwprintw(win, 0, 2, " jugadores ");
 
     int row = 1;
@@ -106,21 +94,18 @@ static void draw_players(WINDOW *win, const state_t *st){
         wattroff(win, COLOR_PAIR(pair) | A_BOLD);
 
         mvwprintw(win, row, 18, "sc=%u v=%u inv=%u", p->score, p->v_moves, p->inv_moves);
-        mvwprintw(win, row+1, 4, "pos=(%u,%u) %s%s",
+        mvwprintw(win, row+1, 4, "pos=(%u,%u) %s",
                   p->pos_x, p->pos_y,
-                  p->blocked ? "blk" : "ok",
-                  player_has_dead(st, (int)i) ? " dead" : "");
+                  p->blocked ? "blk" : "ok");
         row += 2;
         if (row+1 >= getmaxy(win)) break;
     }
-
     wnoutrefresh(win);
 }
 
-// ui principal
 static void draw_ui(const state_t *st){
     int term_h, term_w; getmaxyx(stdscr, term_h, term_w);
-    (void)term_h; // saca el warning
+    (void)term_h;
     int W = st->width, H = st->height;
 
     attron(COLOR_PAIR(10));
@@ -173,29 +158,45 @@ static void draw_ui(const state_t *st){
     doupdate();
 }
 
-int main(void){
+static void usage(const char *p){
+    fprintf(stderr, "Uso: %s -w ancho -h alto\n", p);
+}
+
+int main(int argc, char **argv){
+    unsigned short W = 0, H = 0;
+
+    int opt;
+    while ((opt = getopt(argc, argv, "w:h:")) != -1){
+        switch(opt){
+            case 'w': W = (unsigned short)strtoul(optarg, NULL, 10); break;
+            case 'h': H = (unsigned short)strtoul(optarg, NULL, 10); break;
+            default: usage(argv[0]); return 2;
+        }
+    }
+    if (W == 0 || H == 0){ usage(argv[0]); return 2; }
+
     state_t *st = ipc_open_and_map_state();
     if (!st){ perror("view: open state"); return 1; }
     sync_t  *sy = ipc_open_and_map_sync();
     if (!sy){ perror("view: open sync"); ipc_unmap_state(st); return 1; }
+
+    if (st->width != W || st->height != H){
+        // simple aviso
+        fprintf(stderr, "view: advertencia: W/H recibidos (%u,%u) difieren de SHM (%u,%u)\n",
+                (unsigned)W,(unsigned)H,(unsigned)st->width,(unsigned)st->height);
+    }
 
     initscr(); cbreak(); noecho(); keypad(stdscr, TRUE); nodelay(stdscr, FALSE);
     curs_set(0);
     if (has_colors()) init_colors();
 
     while (1){
-        // esperar cambio de estado
         sem_wait(&sy->A);
-
-        // leer y dibujar
         rw_reader_enter(sy);
         int over = st->game_over;
         draw_ui(st);
         rw_reader_exit(sy);
-
-        // notificar fin de impresion
         sem_post(&sy->B);
-
         if (over) break;
     }
 

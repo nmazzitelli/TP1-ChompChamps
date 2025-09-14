@@ -25,7 +25,7 @@ static const int STEP_MAX = 5000;
 static int clamp_int(int v, int lo, int hi){ if (v < lo) return lo; if (v > hi) return hi; return v; }
 
 int main(void) {
-    int values[NUM_OPTIONS] = {20, 20, 10, 2, 10}; // defaults: W,H,S,N,STEP_MS
+    int values[NUM_OPTIONS] = {20, 20, 120, 2, 50}; // defaults: W,H,S,N,STEP_MS
     const char *base_labels[NUM_OPTIONS] = {
         "Ancho del tablero (W)",
         "Alto del tablero (H)",
