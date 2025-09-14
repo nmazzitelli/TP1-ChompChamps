@@ -6,6 +6,7 @@
 # Binarios generados (se ignoran todos dentro de bin/)
 play
 shm_tool
+ChompChamps
 
 # Archivos de prueba / logs
 *.log
@@ -29,7 +30,8 @@ shm_tool
 bin/
 obj/
 
-# Reportes / artefactos generados
-report.html/
+
 strace_out
+ChompChamps
+.DS_Store
 

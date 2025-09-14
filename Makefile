@@ -1,61 +1,44 @@
-# ===== deteccion de SO =====
-UNAME_S := $(shell uname -s)
+###############################################################################
+# Makefile mínimo para TP1 (versión simplificada)
+# Comandos usados: make docker | make deps | make clean | make build | make play
+###############################################################################
 
-CC      := gcc
-CFLAGS  := -Wall -Wextra -Wconversion -Wshadow -Wformat=2 -g -O0 -Iinclude -MMD -MP -D_POSIX_C_SOURCE=200809L
-LDLIBS  := -pthread -lm
-ifeq ($(UNAME_S),Linux)          # Docker / Linux
-  LDLIBS += -lrt                 # librt en Linux
-else                             # macOS (solo conveniencia local)
+UNAME_S := $(shell uname -s)
+CC = gcc
+CFLAGS = -Wall -Wextra -Wconversion -Wshadow -Wformat=2 -g -O0 -Iinclude -D_POSIX_C_SOURCE=200809L
+LDLIBS = -pthread -lm
+ifeq ($(UNAME_S),Linux)
+  LDLIBS += -lrt
+else
   CFLAGS += -Wno-deprecated-declarations
 endif
+LIBS_VIEW = -lncurses
 
-LIBS_VIEW := -lncurses
+SRCDIR = src
+BINDIR = bin
+OBJDIR = obj
 
-# ===== carpetas =====
-SRCDIR := src
-INCDIR := include
-BINDIR := bin
-OBJDIR := obj
+# Fuentes necesarias (sin shm_tool ni extras)
+SRCS = $(SRCDIR)/ipc.c $(SRCDIR)/master.c $(SRCDIR)/player.c $(SRCDIR)/view.c $(SRCDIR)/play.c
+OBJS = $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 
-# ===== fuentes =====
-COMMON_SRCS := $(SRCDIR)/ipc.c
-MASTER_SRCS := $(SRCDIR)/master.c
-PLAYER_SRCS := $(SRCDIR)/player.c
-VIEW_SRCS   := $(SRCDIR)/view.c
-TOOL_SRCS   := $(SRCDIR)/shm_tool.c
-PLAY_SRCS   := $(SRCDIR)/play.c
+BINARIES = $(BINDIR)/master $(BINDIR)/player $(BINDIR)/view $(BINDIR)/play
 
-COMMON_OBJS := $(COMMON_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
-MASTER_OBJS := $(MASTER_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
-PLAYER_OBJS := $(PLAYER_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
-VIEW_OBJS   := $(VIEW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
-TOOL_OBJS   := $(TOOL_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
-PLAY_OBJS   := $(PLAY_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+.PHONY: build clean deps docker play
 
-DEPS := $(COMMON_OBJS:.o=.d) $(MASTER_OBJS:.o=.d) $(PLAYER_OBJS:.o=.d) $(VIEW_OBJS:.o=.d) $(TOOL_OBJS:.o=.d) $(PLAY_OBJS:.o=.d)
-
-# ===== targets =====
-.PHONY: all build clean distclean docker deps run-demo play
-
-all: build
-
-build: $(BINDIR)/master $(BINDIR)/player $(BINDIR)/view $(BINDIR)/shm_tool
+build: $(BINARIES)
 	@echo "✔ build ok"
 
-$(BINDIR)/master: $(COMMON_OBJS) $(MASTER_OBJS) | $(BINDIR)
+$(BINDIR)/master: $(OBJDIR)/ipc.o $(OBJDIR)/master.o | $(BINDIR)
 	$(CC) $^ -o $@ $(LDLIBS)
 
-$(BINDIR)/player: $(COMMON_OBJS) $(PLAYER_OBJS) | $(BINDIR)
+$(BINDIR)/player: $(OBJDIR)/ipc.o $(OBJDIR)/player.o | $(BINDIR)
 	$(CC) $^ -o $@ $(LDLIBS)
 
-$(BINDIR)/view: $(COMMON_OBJS) $(VIEW_OBJS) | $(BINDIR)
+$(BINDIR)/view: $(OBJDIR)/ipc.o $(OBJDIR)/view.o | $(BINDIR)
 	$(CC) $^ -o $@ $(LDLIBS) $(LIBS_VIEW)
 
-$(BINDIR)/shm_tool: $(COMMON_OBJS) $(TOOL_OBJS) | $(BINDIR)
-	$(CC) $^ -o $@ $(LDLIBS)
-
-$(BINDIR)/play: $(PLAY_OBJS) | $(BINDIR)
+$(BINDIR)/play: $(OBJDIR)/play.o | $(BINDIR)
 	$(CC) $^ -o $@ $(LIBS_VIEW)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
@@ -68,28 +51,14 @@ clean:
 	rm -rf $(OBJDIR)
 	@echo "✔ clean"
 
-distclean: clean
-	rm -rf $(BINDIR)
-
-# instala ncurses (debian/ubuntu). en docker de la catedra ya viene.
 deps:
 	@echo ">> Instalando dependencias (ncurses)..."
 	@apt-get update -y
 	@DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libncurses-dev
 	@echo "✔ ncurses instalado"
 
-
-# ejemplo rapido
-run-demo: build
-	NPLAYERS=2 STEP_MS=1 $(BINDIR)/master -w 20 -h 20 -v $(BINDIR)/view -p $(BINDIR)/player -p $(BINDIR)/player -d 300 -t 10
-
-
-# compilar y correr play (antes demo2)
 play: $(BINDIR)/play
 	$(BINDIR)/play
 
-# correr en docker (imagen multi plataforma de la catedra)
 docker:
 	docker run --rm -it -v "$$PWD":/work -w /work agodio/itba-so-multi-platform:3.0 bash
-
--include $(DEPS)
