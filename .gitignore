@@ -3,10 +3,9 @@
 *.out
 *.exe
 
-# Binarios generados
-master
-view
-player
+# Binarios generados (se ignoran todos dentro de bin/)
+play
+shm_tool
 
 # Archivos de prueba / logs
 *.log
@@ -26,6 +25,11 @@ player
 # Archivos de dependencias generados por -MMD
 *.d
 
-# Ejecutables compilados en bin/
+# Directorios de build
 bin/
+obj/
+
+# Reportes / artefactos generados
+report.html/
+strace_out
 

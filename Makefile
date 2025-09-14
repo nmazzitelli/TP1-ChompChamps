@@ -24,19 +24,19 @@ MASTER_SRCS := $(SRCDIR)/master.c
 PLAYER_SRCS := $(SRCDIR)/player.c
 VIEW_SRCS   := $(SRCDIR)/view.c
 TOOL_SRCS   := $(SRCDIR)/shm_tool.c
-DEMO2_SRCS  := $(SRCDIR)/demo2.c
+PLAY_SRCS   := $(SRCDIR)/play.c
 
 COMMON_OBJS := $(COMMON_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 MASTER_OBJS := $(MASTER_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 PLAYER_OBJS := $(PLAYER_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 VIEW_OBJS   := $(VIEW_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 TOOL_OBJS   := $(TOOL_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
-DEMO2_OBJS  := $(DEMO2_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+PLAY_OBJS   := $(PLAY_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 
-DEPS := $(COMMON_OBJS:.o=.d) $(MASTER_OBJS:.o=.d) $(PLAYER_OBJS:.o=.d) $(VIEW_OBJS:.o=.d) $(TOOL_OBJS:.o=.d) $(DEMO2_OBJS:.o=.d)
+DEPS := $(COMMON_OBJS:.o=.d) $(MASTER_OBJS:.o=.d) $(PLAYER_OBJS:.o=.d) $(VIEW_OBJS:.o=.d) $(TOOL_OBJS:.o=.d) $(PLAY_OBJS:.o=.d)
 
 # ===== targets =====
-.PHONY: all build clean distclean docker deps run-demo demo2
+.PHONY: all build clean distclean docker deps run-demo play
 
 all: build
 
@@ -55,7 +55,7 @@ $(BINDIR)/view: $(COMMON_OBJS) $(VIEW_OBJS) | $(BINDIR)
 $(BINDIR)/shm_tool: $(COMMON_OBJS) $(TOOL_OBJS) | $(BINDIR)
 	$(CC) $^ -o $@ $(LDLIBS)
 
-$(BINDIR)/demo2: $(DEMO2_OBJS) | $(BINDIR)
+$(BINDIR)/play: $(PLAY_OBJS) | $(BINDIR)
 	$(CC) $^ -o $@ $(LIBS_VIEW)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
@@ -84,9 +84,9 @@ run-demo: build
 	NPLAYERS=2 STEP_MS=1 $(BINDIR)/master -w 20 -h 20 -v $(BINDIR)/view -p $(BINDIR)/player -p $(BINDIR)/player -d 300 -t 10
 
 
-# compilar y correr demo2
-demo2: $(BINDIR)/demo2
-	$(BINDIR)/demo2
+# compilar y correr play (antes demo2)
+play: $(BINDIR)/play
+	$(BINDIR)/play
 
 # correr en docker (imagen multi plataforma de la catedra)
 docker:

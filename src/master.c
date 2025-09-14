@@ -19,6 +19,7 @@
 #include "rwsem.h"
 #include <getopt.h>
 
+// util
 static int clamp(int v, int lo, int hi){ if (v<lo) return lo; if (v>hi) return hi; return v; }
 static void usage(const char* p){
     fprintf(stderr,
@@ -27,7 +28,9 @@ static void usage(const char* p){
 }
 static uint64_t now_ms(void){
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec*1000u + (uint64_t)ts.tv_nsec/1000000u;
+    uint64_t sec  = (uint64_t)ts.tv_sec;
+    uint64_t nsec = (uint64_t)ts.tv_nsec;
+    return sec*1000u + nsec/1000000u;
 }
 static void sleep_ms(int ms){
     if (ms<=0) return;
@@ -35,6 +38,7 @@ static void sleep_ms(int ms){
     nanosleep(&ts, NULL);
 }
 
+// init helpers
 static void board_fill_random(state_t *st){
     int W = st->width, H = st->height;
     for (int y=0; y<H; ++y)
@@ -56,11 +60,12 @@ static void distribute_positions(int n, int W, int H, int *px, int *py){
         }
 }
 
+// setea la celda inicial como capturada por el jugador i (no suma score)
 static void paint_initial_positions(state_t *st, int n, const int *px, const int *py){
     int W = st->width;
     for (int i=0;i<n;++i){
         int id = idx_xy(px[i], py[i], W);
-        st->board[id] = -i; // capturada por i
+        st->board[id] = -i; // capturada por i (nota: id=0 => celda=0)
         st->players[i].pos_x = (unsigned short)px[i];
         st->players[i].pos_y = (unsigned short)py[i];
     }
@@ -87,6 +92,7 @@ static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], uns
         int rd = pfd[0], wr = pfd[1];
         pid_t c = fork();
         if (c == 0){
+            // hijo jugador: su stdout es el pipe
             close(rd);
             if (dup2(wr, STDOUT_FILENO) < 0){ perror("dup2"); _exit(127); }
             if (wr != STDOUT_FILENO) close(wr);
@@ -99,6 +105,7 @@ static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], uns
         } else if (c < 0){
             perror("fork player"); close(rd); close(wr); p_rd[i]=-1; pids[i]=0;
         } else {
+            // padre: se queda con extremo de lectura
             pids[i]=c; close(wr); p_rd[i]=rd;
         }
     }
@@ -113,23 +120,31 @@ static bool any_free_adjacent(const state_t *st, int x0, int y0){
     return false;
 }
 
+// c
 static void run_round_robin(state_t *st, sync_t *sy,
     int nplayers, int step_ms, int timeout_s,
     int px[], int py[], int p_rd[], pid_t pids[])
 {
     bool active_fd[MAX_PLAYERS];
-    for (int i = 0; i < nplayers; ++i) active_fd[i] = (p_rd[i] >= 0);
+    for (int i = 0; i < nplayers; ++i)
+        active_fd[i] = (p_rd[i] >= 0);
 
     uint64_t last_valid_ms = now_ms();
 
-    while (1) {
-        if (timeout_s > 0 && (now_ms() - last_valid_ms >= (uint64_t)timeout_s * 1000u)) break;
+    /* seed: habilitar 1 solicitud por jugador activo (sin acumular) */
+    for (int i = 0; i < nplayers; ++i){
+        if (active_fd[i]) sem_post(&sy->G[i]);
+    }
 
-        for (int i = 0; i < nplayers; ++i){ if (active_fd[i]) sem_post(&sy->G[i]); }
+    while (true) {
+        if (timeout_s > 0 && (now_ms() - last_valid_ms >= (uint64_t)timeout_s * 1000u))
+            break;
 
+        /* build fd_set con pipes activos */
         fd_set rfds; FD_ZERO(&rfds);
-        int maxfd = -1; int any_active = 0;
-        for (int i = 0; i < nplayers; ++i){
+        int maxfd = -1;
+        int any_active = 0;
+        for (int i = 0; i < nplayers; ++i) {
             if (!active_fd[i]) continue;
             FD_SET(p_rd[i], &rfds);
             if (p_rd[i] > maxfd) maxfd = p_rd[i];
@@ -137,8 +152,9 @@ static void run_round_robin(state_t *st, sync_t *sy,
         }
         if (!any_active) break;
 
+        /* select con timeout step_ms */
         struct timeval tv;
-        tv.tv_sec  = (time_t)((step_ms > 0) ? (step_ms / 1000) : 0);
+        tv.tv_sec = (time_t)((step_ms > 0) ? (step_ms / 1000) : 0);
         tv.tv_usec = (suseconds_t)((step_ms > 0) ? ((step_ms % 1000) * 1000) : 0);
 
         int ready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
@@ -173,38 +189,48 @@ static void run_round_robin(state_t *st, sync_t *sy,
                             int val = st->board[idx_new];
 
                             if (val > 0) {
+                                // valid move: sumar reward y capturar celda como -i
                                 rw_writer_enter(sy);
                                 st->players[i].v_moves++;
                                 st->players[i].score += (unsigned int)val;
                                 st->board[idx_new] = -i;  // capturada por i
+                                // update shm pos
                                 st->players[i].pos_x = (unsigned short)nx;
                                 st->players[i].pos_y = (unsigned short)ny;
                                 rw_writer_exit(sy);
 
-                                px[i] = nx; py[i] = ny;
+                                px[i] = nx;
+                                py[i] = ny;
 
                                 repaint(sy);
                                 last_valid_ms = now_ms();
                                 moved = true;
                             } else {
+                                // destino no libre
                                 rw_writer_enter(sy);
                                 st->players[i].inv_moves++;
                                 rw_writer_exit(sy);
                             }
                         } else {
+                            // out of bounds
                             rw_writer_enter(sy);
                             st->players[i].inv_moves++;
                             rw_writer_exit(sy);
                         }
                     } else {
+                        // direccion invalida
                         rw_writer_enter(sy);
                         st->players[i].inv_moves++;
                         rw_writer_exit(sy);
                     }
 
-                    processed[i] = moved;
-                    any_valid_this_cycle = any_valid_this_cycle || moved;
+                    processed[i] = true;               // se consumió su solicitud
+                    any_valid_this_cycle |= moved;
+
+                    /* re-habilitar SOLO al jugador que ya fue procesado (1 token nuevo) */
+                    sem_post(&sy->G[i]);
                 } else if (r == 0) {
+                    // eof: jugador cerro -> marcar bloqueado
                     rw_writer_enter(sy);
                     st->players[i].blocked = true;
                     rw_writer_exit(sy);
@@ -219,6 +245,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
             }
         }
 
+        // jugadores habilitados que no se procesaron: si no hay libres adyacentes -> bloquearlos
         for (int i = 0; i < nplayers; ++i) {
             if (!active_fd[i]) continue;
             if (processed[i]) continue;
@@ -233,9 +260,17 @@ static void run_round_robin(state_t *st, sync_t *sy,
             }
         }
 
+        /* early stop: si queda solo 1 jugador activo, terminar ya mismo */
+        {
+            int count_active = 0;
+            for (int i = 0; i < nplayers; ++i) if (active_fd[i]) count_active++;
+            if (count_active <= 1) break;
+        }
+
         if (any_valid_this_cycle && step_ms > 0) sleep_ms(step_ms);
 
-        bool any = false; for (int i = 0; i < nplayers; ++i) if (active_fd[i]) { any = true; break; }
+        bool any = false;
+        for (int i = 0; i < nplayers; ++i) if (active_fd[i]) { any = true; break; }
         if (!any) break;
     }
 
@@ -247,7 +282,9 @@ static void run_round_robin(state_t *st, sync_t *sy,
 }
 
 static const char* color_name_for_player(unsigned i){
-    static const char *names[8] = { "blue","red","green","magenta","cyan","yellow","white","black" };
+    static const char *names[8] = {
+        "blue", "red", "green", "magenta", "cyan", "yellow", "white", "black"
+    };
     return names[i % 8];
 }
 
@@ -260,23 +297,32 @@ static void print_results(const state_t *st){
         const char *col = color_name_for_player(i);
         printf("Jugador %s (PID %d, color=%s): score=%u, validos=%u, invalidos=%u\n",
                p->name[0] ? p->name : "P?",
-               (int)p->player_pid, col, p->score, p->v_moves, p->inv_moves);
-        if (winner < 0) winner = (int)i;
-        else {
+               (int)p->player_pid,
+               col,
+               p->score,
+               p->v_moves,
+               p->inv_moves);
+
+        if (winner < 0){
+            winner = (int)i;
+        } else {
             const player_t *w = &st->players[winner];
             if (p->score > w->score ||
                (p->score == w->score && p->v_moves > w->v_moves) ||
                (p->score == w->score && p->v_moves == w->v_moves && p->inv_moves < w->inv_moves) ||
                (p->score == w->score && p->v_moves == w->v_moves && p->inv_moves == w->inv_moves && p->player_pid < w->player_pid)){
                 winner = (int)i;
-            }
+               }
         }
     }
 
     if (winner >= 0){
         const player_t *w = &st->players[winner];
         const char *wcol = color_name_for_player((unsigned)winner);
-        printf("\nGanador: %s (PID %d, color=%s)\n", w->name[0] ? w->name : "P?", (int)w->player_pid, wcol);
+        printf("\nGanador: %s (PID %d, color=%s)\n",
+               w->name[0] ? w->name : "P?",
+               (int)w->player_pid,
+               wcol);
     } else {
         printf("\nGanador: ninguno\n");
     }
@@ -290,29 +336,72 @@ int main(int argc, char **argv){
     char *view_path = NULL;
     char *players[MAX_PLAYERS];
     int nplayers = 0;
+
     for (int i = 0; i < MAX_PLAYERS; ++i) players[i] = NULL;
 
     int opt;
     const char *optstr = "w:h:d:t:s:v:p:";
     while ((opt = getopt(argc, argv, optstr)) != -1){
         switch (opt){
-            case 'w': { long v = strtol(optarg, NULL, 10); W = (unsigned short)clamp((int)v, 1, 65535); break; }
-            case 'h': { long v = strtol(optarg, NULL, 10); H = (unsigned short)clamp((int)v, 1, 65535); break; }
-            case 'd': { long v = strtol(optarg, NULL, 10); delay = clamp((int)v, 0, 5000); break; }
-            case 't': { long v = strtol(optarg, NULL, 10); timeout = (int)clamp((int)v, 0, 3600); break; }
-            case 's': { long v = strtol(optarg, NULL, 10); seed = (int)v; break; }
-            case 'v': view_path = optarg; break;
+            case 'w': {
+                char *end = NULL;
+                long v = strtol(optarg, &end, 10);
+                if (end && *end != '\0'){ usage(argv[0]); return 1; }
+                W = (unsigned short)clamp((int)v, 1, 65535);
+                break;
+            }
+            case 'h': {
+                char *end = NULL;
+                long v = strtol(optarg, &end, 10);
+                if (end && *end != '\0'){ usage(argv[0]); return 1; }
+                H = (unsigned short)clamp((int)v, 1, 65535);
+                break;
+            }
+            case 'd': {
+                char *end = NULL;
+                long v = strtol(optarg, &end, 10);
+                if (end && *end != '\0'){ usage(argv[0]); return 1; }
+                delay = clamp((int)v, 0, 5000);
+                break;
+            }
+            case 't': {
+                char *end = NULL;
+                long v = strtol(optarg, &end, 10);
+                if (end && *end != '\0'){ usage(argv[0]); return 1; }
+                timeout = (int)clamp((int)v, 0, 3600);
+                break;
+            }
+            case 's': {
+                char *end = NULL;
+                long v = strtol(optarg, &end, 10);
+                if (end && *end != '\0'){ usage(argv[0]); return 1; }
+                seed = (int)v;
+                break;
+            }
+            case 'v':
+                view_path = optarg;
+                break;
             case 'p':
                 if (nplayers < MAX_PLAYERS) players[nplayers++] = optarg;
-                while (optind < argc && argv[optind][0] != '-' && nplayers < MAX_PLAYERS)
+                while (optind < argc && argv[optind][0] != '-' && nplayers < MAX_PLAYERS){
                     players[nplayers++] = argv[optind++];
+                }
                 break;
-            default: usage(argv[0]); return 1;
+            default:
+                usage(argv[0]);
+                return 1;
         }
     }
-    if (W == 0 || H == 0 || view_path == NULL || nplayers == 0){ usage(argv[0]); return 1; }
 
+    if (W == 0 || H == 0 || view_path == NULL || nplayers == 0){
+        usage(argv[0]);
+        return 1;
+    }
+
+    int step_ms = delay;
     srand((unsigned)seed);
+    int nplayers_cfg = nplayers;
+
     bool existed_state=false, created_sync=false;
     state_t *st = ipc_create_and_map_state(W, H, &existed_state);
     if (!st){ perror("master: create state"); return 1; }
@@ -324,7 +413,7 @@ int main(int argc, char **argv){
 
     rw_writer_enter(sy);
     st->width = W; st->height = H;
-    st->num_players = (unsigned int)nplayers;
+    st->num_players = (unsigned int)nplayers_cfg;
     st->game_over = false;
     for (unsigned i=0;i<st->num_players;++i){
         st->players[i].score = 0u;
@@ -341,27 +430,35 @@ int main(int argc, char **argv){
     if (pid_view < 0){ perror("fork view"); ipc_unmap_sync(sy); ipc_unmap_state(st); return 1; }
 
     int p_rd[MAX_PLAYERS]; pid_t pids[MAX_PLAYERS]; memset(pids,0,sizeof(pids));
-    launch_players(nplayers, players, p_rd, pids, W, H);
+    launch_players(nplayers_cfg, players, p_rd, pids, W, H);
 
     rw_writer_enter(sy);
-    for (int i=0;i<nplayers;++i){
+    for (int i=0;i<nplayers_cfg;++i){
         snprintf(st->players[i].name, NAME_LEN, "P%d", i);
         st->players[i].player_pid = pids[i];
     }
     rw_writer_exit(sy);
 
     int px[MAX_PLAYERS], py[MAX_PLAYERS];
-    distribute_positions(nplayers, (int)W, (int)H, px, py);
-    rw_writer_enter(sy); paint_initial_positions(st, nplayers, px, py); rw_writer_exit(sy);
+    distribute_positions(nplayers_cfg, (int)W, (int)H, px, py);
+    rw_writer_enter(sy); paint_initial_positions(st, nplayers_cfg, px, py); rw_writer_exit(sy);
 
     repaint(sy);
-    run_round_robin(st, sy, nplayers, delay, timeout, px, py, p_rd, pids);
 
-    for (int i = 0; i < nplayers; ++i) if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
-    for (int i = 0; i < nplayers; ++i) if (pids[i] > 0) { int stc = 0; waitpid(pids[i], &stc, 0); }
+    run_round_robin(st, sy, nplayers_cfg, step_ms, timeout, px, py, p_rd, pids);
+
+    for (int i = 0; i < nplayers_cfg; ++i) {
+        if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
+    }
+
+    for (int i = 0; i < nplayers_cfg; ++i) {
+        if (pids[i] > 0) { int stc = 0; waitpid(pids[i], &stc, 0); }
+    }
+
     if (pid_view > 0) { int stv = 0; waitpid(pid_view, &stv, 0); }
 
     print_results(st);
+
     ipc_unmap_sync(sy);
     ipc_unmap_state(st);
     return 0;

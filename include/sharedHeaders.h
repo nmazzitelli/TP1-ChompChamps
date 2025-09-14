@@ -69,7 +69,7 @@ typedef struct {
 typedef struct {
     sem_t A;                // master -> view: hay cambios
     sem_t B;                // view  -> master: termine
-    sem_t C;                // turnstile (no usado en version simple)
+    sem_t C;                // turnstile
     sem_t D;                // mutex escritor del estado
     sem_t E;                // mutex readers
     unsigned int F;         // cantidad de lectores
