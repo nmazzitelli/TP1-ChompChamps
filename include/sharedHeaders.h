@@ -38,7 +38,7 @@ static inline bool in_bounds(int x,int y,int W,int H){
 
 // esquema de celdas segun enunciado:
 // libre: 1..9 (recompensa)
-// capturada por jugador id: v = -id, con id en [0..8] => valores en [-8..0]
+// capturada por jugador id, pone la celda en valor -id
 static inline int cell_owner(int v){
     return (v <= 0) ? -v : -1; // -1 => libre
 }
@@ -67,13 +67,13 @@ typedef struct {
 
 // sincronizacion (SHM_SYNC)
 typedef struct {
-    sem_t A;                // master -> view: hay cambios
-    sem_t B;                // view  -> master: termine
-    sem_t C;                // turnstile
-    sem_t D;                // mutex escritor del estado
-    sem_t E;                // mutex readers
-    unsigned int F;         // cantidad de lectores
-    sem_t G[MAX_PLAYERS];   // gate por jugador
+    sem_t A;                // El máster le indica a la vista que hay cambios por imprimir
+    sem_t B;                // La vista le indica al máster que terminó de imprimir
+    sem_t C;                // Mutex para evitar inanición del máster al acceder al estado
+    sem_t D;                // Mutex para el estado del juego
+    sem_t E;                // Mutex para la siguiente variable
+    unsigned int F;         // Cantidad de jugadores leyendo el estado
+    sem_t G[MAX_PLAYERS];   // Le indican a cada jugador que puede enviar 1 movimiento
 } sync_t;
 
 #endif // SHAREDHEADERS_H

@@ -63,7 +63,7 @@ state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *exis
 }
 
 state_t* ipc_open_and_map_state(void) {
-    // 1) Intentar RW (para cuando el master es el tuyo y permite escritura)
+    // 1) Intentar RW (para cuando el master es el nuestro y permite escritura)
     int fd = shm_open(SHM_STATE, O_RDWR, 0);
     if (fd >= 0) {
         struct stat stbuf;
@@ -73,7 +73,7 @@ state_t* ipc_open_and_map_state(void) {
         return (p == MAP_FAILED) ? NULL : (state_t*)p;
     }
 
-    // 2) Si falló por permisos, reintentar RO (caso máster cátedra)
+    // 2) Si falló por permisos (caso master cátedra)
     if (errno == EACCES || errno == EPERM) {
         fd = shm_open(SHM_STATE, O_RDONLY, 0);
         if (fd < 0) return NULL;
@@ -142,14 +142,14 @@ int ipc_init_sync_semaphores(sync_t *sy) {
     if (!sy) { errno = EINVAL; return -1; }
 
     // pshared=1 → entre procesos
-    if (sem_init(&sy->A, 1, 0) != 0) return -1;  // print_needed
-    if (sem_init(&sy->B, 1, 0) != 0) return -1;  // print_done
-    if (sem_init(&sy->C, 1, 1) != 0) return -1;  // master_utd (anti-inanición writer)
-    if (sem_init(&sy->D, 1, 1) != 0) return -1;  // game_state_change (exclusión escritor)
-    if (sem_init(&sy->E, 1, 1) != 0) return -1;  // sig_var (protege readers)
-    sy->F = 0;                                   // readers
+    if (sem_init(&sy->A, 1, 0) != 0) return -1;  // A: solicitud de impresion
+    if (sem_init(&sy->B, 1, 0) != 0) return -1;  // B: impresion completada
+    if (sem_init(&sy->C, 1, 1) != 0) return -1;  // C: acceso ordenado
+    if (sem_init(&sy->D, 1, 1) != 0) return -1;  // D: bloquea escritores lectores
+    if (sem_init(&sy->E, 1, 1) != 0) return -1;  // E: mutex del contador de lectores para proteger F
+    sy->F = 0;                                   // F: cantidad de lectores activos
     for (int i = 0; i < MAX_PLAYERS; ++i) {
-        if (sem_init(&sy->G[i], 1, 0) != 0) return -1; // gate por jugador
+        if (sem_init(&sy->G[i], 1, 0) != 0) return -1; // G[i] compuerta por jugador
     }
     return 0;
 }

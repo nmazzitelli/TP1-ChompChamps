@@ -15,7 +15,7 @@
 static void ensure_term(void){
     const char *t = getenv("TERM");
     if (!t || !t[0] || strcmp(t, "unknown") == 0){
-        /* terminal segura por defecto */
+        // terminal segura por defecto
         setenv("TERM", "xterm", 1);
     }
 }
@@ -86,7 +86,6 @@ static void draw_board(WINDOW *win, const state_t *st){
     wnoutrefresh(win);
 }
 
-// players panel
 static void draw_players(WINDOW *win, const state_t *st){
     werase(win);
     box(win, 0, 0);

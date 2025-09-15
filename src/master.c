@@ -131,7 +131,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
 
     uint64_t last_valid_ms = now_ms();
 
-    /* seed: habilitar 1 solicitud por jugador activo (sin acumular) */
+    // seed: habilitar 1 solicitud por jugador activo (sin acumular)
     for (int i = 0; i < nplayers; ++i){
         if (active_fd[i]) sem_post(&sy->G[i]);
     }
@@ -140,7 +140,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
         if (timeout_s > 0 && (now_ms() - last_valid_ms >= (uint64_t)timeout_s * 1000u))
             break;
 
-        /* build fd_set con pipes activos */
+        // build fd_set con pipes activos
         fd_set rfds; FD_ZERO(&rfds);
         int maxfd = -1;
         int any_active = 0;
@@ -152,7 +152,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
         }
         if (!any_active) break;
 
-        /* select con timeout step_ms */
+        // select con timeout step_ms
         struct timeval tv;
         tv.tv_sec = (time_t)((step_ms > 0) ? (step_ms / 1000) : 0);
         tv.tv_usec = (suseconds_t)((step_ms > 0) ? ((step_ms % 1000) * 1000) : 0);
@@ -227,7 +227,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
                     processed[i] = true;               // se consumió su solicitud
                     any_valid_this_cycle |= moved;
 
-                    /* re-habilitar SOLO al jugador que ya fue procesado (1 token nuevo) */
+                    // re-habilitar SOLO al jugador que ya fue procesado (1 token nuevo)
                     sem_post(&sy->G[i]);
                 } else if (r == 0) {
                     // eof: jugador cerro -> marcar bloqueado
@@ -260,7 +260,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
             }
         }
 
-        /* early stop: si queda solo 1 jugador activo, terminar ya mismo */
+        // early stop: si queda solo 1 jugador activo, terminar ya mismo
         {
             int count_active = 0;
             for (int i = 0; i < nplayers; ++i) if (active_fd[i]) count_active++;

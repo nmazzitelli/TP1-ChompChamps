@@ -11,14 +11,14 @@
 #define NUM_OPTIONS 5
 
 // rangos como los del master
-static const int MIN_W = 10;
+static const int MIN_W = 10;		// minimo 10x10
 static const int MAX_W = 65535;
-static const int MIN_H = 10;
+static const int MIN_H = 10;		// minimo 10x10
 static const int MAX_H = 65535;
-static const int S_MIN = 0;
+static const int S_MIN = 0;			// 0 seg = sin timeout
 static const int S_MAX = 3600;
-static const int N_MIN = 1;
-static const int N_MAX = 9;       // MAX_PLAYERS
+static const int N_MIN = 1;			// minimo 1 jugador
+static const int N_MAX = 9;       	// master soporta hasta 9 jugadores
 static const int STEP_MIN = 0;
 static const int STEP_MAX = 5000;
 
@@ -52,7 +52,6 @@ int main(void) {
                 attron(A_REVERSE);
             }
 
-            // compute range display per option
             int lo = 0;
             switch (i) {
                 case 0: lo = MIN_W; break;
@@ -85,7 +84,6 @@ int main(void) {
             refresh();
             int v = values[highlight];
             if (scanw("%d", &v) == 1) {
-                /* clamp according to option */
                 switch (highlight) {
                     case 0: v = clamp_int(v, MIN_W, MAX_W); break;
                     case 1: v = clamp_int(v, MIN_H, MAX_H); break;
@@ -102,7 +100,7 @@ int main(void) {
             refresh();
             napms(700);
         } else if (ch == 'r') {
-            // Minimal validations / clamp again before run
+            // Minimas validaciones
             if (values[0] < MIN_W) values[0] = MIN_W;
             if (values[0] > MAX_W) values[0] = MAX_W;
             if (values[1] < MIN_H) values[1] = MIN_H;
@@ -110,25 +108,25 @@ int main(void) {
             if (values[2] < S_MIN) values[2] = S_MIN;
             if (values[2] > S_MAX) values[2] = S_MAX;
             if (values[3] < N_MIN) values[3] = N_MIN;
-            if (values[3] > N_MAX) values[3] = N_MAX; // master supports up to 9 players
+            if (values[3] > N_MAX) values[3] = N_MAX;
             if (values[4] < STEP_MIN) values[4] = STEP_MIN;
             if (values[4] > STEP_MAX) values[4] = STEP_MAX;
 
-            // Export env if you still want them (optional)
+            // Exportar variables de entorno para player y view
             char buf[32];
             snprintf(buf, sizeof(buf), "%d", values[3]);
             setenv("NPLAYERS", buf, 1);
             snprintf(buf, sizeof(buf), "%d", values[4]);
             setenv("STEP_MS", buf, 1);
 
-            // Prepare args for master (use flags and repeated -p)
+            // Preparar argumentos para master
             char wbuf[16], hbuf[16], sbuf[16], stepbuf[16];
             snprintf(wbuf, sizeof(wbuf), "%d", values[0]);
             snprintf(hbuf, sizeof(hbuf), "%d", values[1]);
             snprintf(sbuf, sizeof(sbuf), "%d", values[2]);
             snprintf(stepbuf, sizeof(stepbuf), "%d", values[4]);
 
-            // build argv vector
+            // construir argv
             const char *player_path = "./bin/player";
             const char *view_path = "./bin/view";
             char *argv[64];
@@ -145,7 +143,7 @@ int main(void) {
             argv[ai++] = "-t"; argv[ai++] = sbuf;
             argv[ai] = NULL;
 
-            endwin(); // close ncurses before exec
+            endwin(); // cerrar ncurses antes de exec
             execvp("./bin/master", argv);
             perror("execlp master");
             exit(1);

@@ -79,7 +79,7 @@ N ?= 2         # jugadores
 # Busca ./ChompChamps o ./ChompChamps/ChompChamps en la raíz del repo.
 run-catedra: $(BINDIR)/view $(BINDIR)/player
 	@# Detectar binario de la cátedra
-	@if [ -x ./ChompChamps ]; then M=./ChompChamps; \
+	@if [ -x ./bin/ChompChamps ]; then M=./bin/ChompChamps; \
 	elif [ -x ./ChompChamps/ChompChamps ]; then M=./ChompChamps/ChompChamps; \
 	else echo "No encuentro el binario 'ChompChamps'. Copialo en ./ChompChamps o ./ChompChamps/ChompChamps"; exit 1; fi; \
 	args=""; for i in $$(seq 1 $(N)); do args="$$args $(BINDIR)/player"; done; \

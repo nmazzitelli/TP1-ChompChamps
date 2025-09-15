@@ -12,11 +12,11 @@
 // Tamaño real de /game_state según W x H
 size_t ipc_state_size(unsigned short width, unsigned short height);
 
-// Crea (o re-crea) /game_state con tamaño W*H y la mapea (RW, MAP_SHARED).
-// Si existed==true, la SHM ya existía (y se reusó+truncó).
+// Crea /game_state con tamaño W*H y la mapea (RW, MAP_SHARED).
+// Si existed==true, la SHM ya existia (y se reuso+trunco)
 state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *existed);
 
-// Abre /game_state existente y la mapea (RW, MAP_SHARED).
+// Abre /game_state existente y la mapea (RW, MAP_SHARED)
 state_t* ipc_open_and_map_state(void);
 
 // Desmapea /game_state
@@ -27,7 +27,7 @@ int ipc_unlink_state(void);
 
 // ---- /game_sync ----
 
-// Crea /game_sync (tamaño fijo) y la mapea (RW). Inicializa semáforos si *created = true.
+// Crea /game_sync (tamaño fijo) y la mapea (RW). Inicializa semaforos si *created = true
 sync_t* ipc_create_and_map_sync(bool *created);
 
 // Abre /game_sync existente

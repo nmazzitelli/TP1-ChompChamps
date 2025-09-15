@@ -7,21 +7,21 @@
 
 // Readers-writers with turnstile to avoid writer starvation.
 // Semaphores in sync_t used:
-//   C: turnstile (blocks new readers when a writer is waiting)
-//   D: room-empty (writer lock; readers hold it while active)
-//   E: mutex protecting F (reader count)
-//   F: active reader count
+//   C: Mutex para evitar inanición del máster al acceder al estado
+//   D: Mutex para el estado del juego
+//   E: Mutex para la siguiente variable
+//   F: Cantidad de jugadores leyendo el estado
 
 static inline void rw_reader_enter(sync_t *sy){
-    // quick pass through turnstile: if a writer has sem_wait'd C, this blocks here
+    // C: acceso ordenado, si un escritor tomo C (sem_wait), el lector espera
     sem_wait(&sy->C);
     sem_post(&sy->C);
 
-    // increment reader count
+    // E/F: protege y actualiza la cantidad de lectores activos
     sem_wait(&sy->E);
     sy->F++;
     if (sy->F == 1) {
-        // first reader locks writers out
+        // Primer lector, toma D para bloquear a los escritores
         sem_wait(&sy->D);
     }
     sem_post(&sy->E);
@@ -31,23 +31,23 @@ static inline void rw_reader_exit(sync_t *sy){
     sem_wait(&sy->E);
     if (sy->F > 0) sy->F--;
     if (sy->F == 0) {
-        // last reader allows writers
+        // el ultimo lector permite escritores
         sem_post(&sy->D);
     }
     sem_post(&sy->E);
 }
 
-// writer obtains turnstile to block new readers, then waits for room to be empty
+// el escritor toma el acceso ordenado (C) para frenar nuevos lectores y despues espera a D
 static inline void rw_writer_enter(sync_t *sy){
-    // block turnstile so new readers wait here
+    // C: bloquea que entren nuevos lectores
     sem_wait(&sy->C);
-    // wait until no active readers
+    // D: espera hasta que no haya lectores activos
     sem_wait(&sy->D);
-    // now writer has exclusive access (holds both C and D)
+    // ahora el escritor tiene acceso
 }
 
 static inline void rw_writer_exit (sync_t *sy){
-    // release writer lock first, then open the turnstile for waiting readers
+    // libera primero D y luego C
     sem_post(&sy->D);
     sem_post(&sy->C);
 }

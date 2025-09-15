@@ -31,7 +31,7 @@ int main(int argc, char **argv){
             default: usage(argv[0]); return 2;
         }
     }
-    /* fallback posicional: <W> <H> */
+    // fallback posicional: <W> <H>
     if ((W == 0 || H == 0) && (optind + 1 < argc)) {
         W = (unsigned short)strtoul(argv[optind],     NULL, 10);
         H = (unsigned short)strtoul(argv[optind + 1], NULL, 10);
@@ -48,7 +48,7 @@ int main(int argc, char **argv){
                 (unsigned)W,(unsigned)H,(unsigned)st->width,(unsigned)st->height);
     }
 
-    /* Si no vino -i, identificarse por PID que el máster escribe en el estado */
+    // Si no vino -i, identificarse por PID que el máster escribe en el estado
     if (me < 0) {
         pid_t self = getpid();
         const int max_wait_ms = 3000; // esperar hasta 3s a que el master complete players[]
