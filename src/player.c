@@ -14,7 +14,9 @@
 #include "ipc.h"
 #include "rwsem.h"
 
-static void usage(const char *p){ fprintf(stderr, "Uso: %s -i idx -w ancho -h alto\n", p); }
+static void usage(const char *p){
+    fprintf(stderr, "Uso: %s [-i idx] [-w ancho -h alto]  o  %s [-i idx] ancho alto\n", p, p);
+}
 
 int main(int argc, char **argv){
     int me = -1;
@@ -29,7 +31,12 @@ int main(int argc, char **argv){
             default: usage(argv[0]); return 2;
         }
     }
-    if (me < 0 || me >= MAX_PLAYERS || W == 0 || H == 0){ usage(argv[0]); return 2; }
+    /* fallback posicional: <W> <H> */
+    if ((W == 0 || H == 0) && (optind + 1 < argc)) {
+        W = (unsigned short)strtoul(argv[optind],     NULL, 10);
+        H = (unsigned short)strtoul(argv[optind + 1], NULL, 10);
+    }
+    if (W == 0 || H == 0){ usage(argv[0]); return 2; }
 
     state_t *st = ipc_open_and_map_state();
     if (!st){ perror("player: open state"); return 1; }
@@ -37,8 +44,27 @@ int main(int argc, char **argv){
     if (!sy){ perror("player: open sync"); ipc_unmap_state(st); return 1; }
 
     if (st->width != W || st->height != H){
-        fprintf(stderr, "player[%d]: advertencia: W/H recibidos (%u,%u) difieren de SHM (%u,%u)\n",
-                me, (unsigned)W,(unsigned)H,(unsigned)st->width,(unsigned)st->height);
+        fprintf(stderr, "player: advertencia: W/H recibidos (%u,%u) difieren de SHM (%u,%u)\n",
+                (unsigned)W,(unsigned)H,(unsigned)st->width,(unsigned)st->height);
+    }
+
+    /* Si no vino -i, identificarse por PID que el máster escribe en el estado */
+    if (me < 0) {
+        pid_t self = getpid();
+        const int max_wait_ms = 3000; // esperar hasta 3s a que el master complete players[]
+        int found = -1;
+        for (int waited = 0; waited <= max_wait_ms && found < 0; waited += 10) {
+            for (unsigned i = 0; i < st->num_players; ++i) {
+                if (st->players[i].player_pid == self) { found = (int)i; break; }
+            }
+            if (found < 0) { struct timespec ts = {0, 10*1000*1000}; nanosleep(&ts, NULL); }
+        }
+        if (found < 0) {
+            fprintf(stderr, "player: no pude resolver mi índice por PID\n");
+            ipc_unmap_sync(sy); ipc_unmap_state(st);
+            return 2;
+        }
+        me = found;
     }
 
     unsigned seed = (unsigned)time(NULL) ^ ((unsigned)getpid()<<16) ^ (unsigned)me;
@@ -48,7 +74,6 @@ int main(int argc, char **argv){
             if (errno == EINTR) continue;
             break;
         }
-
         rw_reader_enter(sy);
         bool over = st->game_over;
         rw_reader_exit(sy);
@@ -56,7 +81,10 @@ int main(int argc, char **argv){
 
         unsigned char dir = (unsigned char)(rand_r(&seed) % 8);
         ssize_t w = write(STDOUT_FILENO, &dir, 1);
-        if (w < 0 && errno == EPIPE) break;
+        if (w < 0){
+            if (errno == EPIPE) break; // el máster cerró el pipe
+            // en otros errores, intentar continuar
+        }
     }
 
     ipc_unmap_sync(sy);

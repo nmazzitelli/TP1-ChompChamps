@@ -12,6 +12,14 @@
 #include "ipc.h"
 #include "rwsem.h"
 
+static void ensure_term(void){
+    const char *t = getenv("TERM");
+    if (!t || !t[0] || strcmp(t, "unknown") == 0){
+        /* terminal segura por defecto */
+        setenv("TERM", "xterm", 1);
+    }
+}
+
 static void init_colors(void){
     start_color();
     use_default_colors();
@@ -159,7 +167,7 @@ static void draw_ui(const state_t *st){
 }
 
 static void usage(const char *p){
-    fprintf(stderr, "Uso: %s -w ancho -h alto\n", p);
+    fprintf(stderr, "Uso: %s [-w ancho -h alto]  o  %s ancho alto\n", p, p);
 }
 
 int main(int argc, char **argv){
@@ -173,6 +181,11 @@ int main(int argc, char **argv){
             default: usage(argv[0]); return 2;
         }
     }
+
+    if ((W == 0 || H == 0) && (optind + 1 < argc)) {
+        W = (unsigned short)strtoul(argv[optind],     NULL, 10);
+        H = (unsigned short)strtoul(argv[optind + 1], NULL, 10);
+    }
     if (W == 0 || H == 0){ usage(argv[0]); return 2; }
 
     state_t *st = ipc_open_and_map_state();
@@ -181,9 +194,16 @@ int main(int argc, char **argv){
     if (!sy){ perror("view: open sync"); ipc_unmap_state(st); return 1; }
 
     if (st->width != W || st->height != H){
-        // simple aviso
         fprintf(stderr, "view: advertencia: W/H recibidos (%u,%u) difieren de SHM (%u,%u)\n",
                 (unsigned)W,(unsigned)H,(unsigned)st->width,(unsigned)st->height);
+    }
+
+    ensure_term();
+    if (initscr() == NULL){
+        fprintf(stderr, "view: no pude inicializar ncurses (TERM=%s)\n", getenv("TERM"));
+        ipc_unmap_sync(sy);
+        ipc_unmap_state(st);
+        return 1;
     }
 
     initscr(); cbreak(); noecho(); keypad(stdscr, TRUE); nodelay(stdscr, FALSE);

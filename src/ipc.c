@@ -63,16 +63,32 @@ state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *exis
 }
 
 state_t* ipc_open_and_map_state(void) {
-    int fd = shm_open(SHM_STATE, O_RDWR, 0660);
-    if (fd < 0) return NULL;
+    // 1) Intentar RW (para cuando el master es el tuyo y permite escritura)
+    int fd = shm_open(SHM_STATE, O_RDWR, 0);
+    if (fd >= 0) {
+        struct stat stbuf;
+        if (fstat(fd, &stbuf) != 0) { int e = errno; close(fd); errno = e; return NULL; }
+        void *p = mmap(NULL, (size_t)stbuf.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        int e = errno; close(fd); errno = e;
+        return (p == MAP_FAILED) ? NULL : (state_t*)p;
+    }
 
-    // Mapear del tamaño actual del objeto (stat)
-    struct stat stbuf;
-    if (fstat(fd, &stbuf) != 0) { close(fd); return NULL; }
+    // 2) Si falló por permisos, reintentar RO (caso máster cátedra)
+    if (errno == EACCES || errno == EPERM) {
+        fd = shm_open(SHM_STATE, O_RDONLY, 0);
+        if (fd < 0) return NULL;
 
-    void *p = map_fd(fd, (size_t)stbuf.st_size);
-    return (state_t*)p;
+        struct stat stbuf;
+        if (fstat(fd, &stbuf) != 0) { int e = errno; close(fd); errno = e; return NULL; }
+        void *p = mmap(NULL, (size_t)stbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
+        int e = errno; close(fd); errno = e;
+        return (p == MAP_FAILED) ? NULL : (state_t*)p;
+    }
+
+    // 3) Otros errores
+    return NULL;
 }
+
 
 void ipc_unmap_state(state_t *st) {
     if (!st) return;
