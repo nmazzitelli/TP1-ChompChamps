@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <stdio.h>
 
+// Devuelve el tamaño total de /game_state header y tablero
 size_t ipc_state_size(unsigned short w, unsigned short h) {
     // sizeof(state_t) incluye el header; sumamos el flexible array board[]
     return sizeof(state_t) + (size_t)w * (size_t)h * sizeof(int);
@@ -51,6 +52,7 @@ state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *exis
     }
 
     if (created) {
+        // Inicializa header y tablero en 0
         memset(st, 0, sz);
         st->width = w;
         st->height = h;
@@ -62,6 +64,7 @@ state_t* ipc_create_and_map_state(unsigned short w, unsigned short h, bool *exis
     return st;
 }
 
+// Abre /game_state existente y lo mapea
 state_t* ipc_open_and_map_state(void) {
     // 1) Intentar RW (para cuando el master es el nuestro y permite escritura)
     int fd = shm_open(SHM_STATE, O_RDWR, 0);
@@ -119,7 +122,7 @@ sync_t* ipc_create_and_map_sync(bool *created) {
         return NULL;
     }
 
-    if (was_created) memset(sy, 0, sizeof(*sy));
+    if (was_created) memset(sy, 0, sizeof(*sy)); // limpia semaforos y contador
     if (created) *created = was_created;
     return sy;
 }
@@ -138,16 +141,21 @@ int ipc_unlink_sync(void) {
     return shm_unlink(SHM_SYNC);
 }
 
+// Inicializa todos los semaforos 
 int ipc_init_sync_semaphores(sync_t *sy) {
     if (!sy) { errno = EINVAL; return -1; }
 
     // pshared=1 → entre procesos
     if (sem_init(&sy->A, 1, 0) != 0) return -1;  // A: solicitud de impresion
     if (sem_init(&sy->B, 1, 0) != 0) return -1;  // B: impresion completada
+
+    // Lectores/escritores
     if (sem_init(&sy->C, 1, 1) != 0) return -1;  // C: acceso ordenado
     if (sem_init(&sy->D, 1, 1) != 0) return -1;  // D: bloquea escritores lectores
     if (sem_init(&sy->E, 1, 1) != 0) return -1;  // E: mutex del contador de lectores para proteger F
     sy->F = 0;                                   // F: cantidad de lectores activos
+
+    // Un semaforo por jugador
     for (int i = 0; i < MAX_PLAYERS; ++i) {
         if (sem_init(&sy->G[i], 1, 0) != 0) return -1; // G[i] compuerta por jugador
     }

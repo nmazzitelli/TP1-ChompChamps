@@ -12,10 +12,16 @@
 //   E: Mutex para la siguiente variable
 //   F: Cantidad de jugadores leyendo el estado
 
+// Si un escritor quiere entrar, toma C y luego espera D. Al tomar C, bloquea nuevos lectores.
+// Los lectores que ya estaban adentro terminan normal, se contabilizan con F.
+// El primer lector en entrar toma D para bloquear escritores, el ultimo lector en salir libera D.
+// El orden C -> D al entrar escritor, y D -> C al salir, evita deadlock.
+
+
 static inline void rw_reader_enter(sync_t *sy){
     // C: acceso ordenado, si un escritor tomo C (sem_wait), el lector espera
     sem_wait(&sy->C);
-    sem_post(&sy->C);
+    sem_post(&sy->C); // Inmediatamente libera C para que otros lectores entren
 
     // E/F: protege y actualiza la cantidad de lectores activos
     sem_wait(&sy->E);
@@ -28,8 +34,9 @@ static inline void rw_reader_enter(sync_t *sy){
 }
 
 static inline void rw_reader_exit(sync_t *sy){
+    // Actualiza F con exclusion y, si es el ultimo, libera a los escritores D
     sem_wait(&sy->E);
-    if (sy->F > 0) sy->F--;
+    if (sy->F > 0) sy->F--; // F no debe ser negativo
     if (sy->F == 0) {
         // el ultimo lector permite escritores
         sem_post(&sy->D);

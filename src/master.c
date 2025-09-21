@@ -13,10 +13,10 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
-#include <sys/select.h>
+#include <sys/select.h> // select(2) para multiplexar pipea de jugadores
 #include <stdint.h>
-#include "ipc.h"
-#include "rwsem.h"
+#include "ipc.h"    // SHM: /game_state y /game_sync
+#include "rwsem.h"  // RW: semaforos de lectura/escritura
 #include <getopt.h>
 
 // util
@@ -26,6 +26,8 @@ static void usage(const char* p){
         "Uso: %s -w ancho -h alto -v ruta_vista -p jugador1 [jugador2 ...] [-d delay_ms] [-t timeout_s] [-s semilla]\n",
         p);
 }
+
+// Reloj mide tiempo entre movimientos validos
 static uint64_t now_ms(void){
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t sec  = (uint64_t)ts.tv_sec;
@@ -39,6 +41,7 @@ static void sleep_ms(int ms){
 }
 
 // init helpers
+// Llena todo el tablero con recompensas del 1 al 9 aleatorias
 static void board_fill_random(state_t *st){
     int W = st->width, H = st->height;
     for (int y=0; y<H; ++y)
@@ -46,9 +49,12 @@ static void board_fill_random(state_t *st){
             st->board[idx_xy(x,y,W)] = 1 + (rand() % 9);
 }
 
+
+// Distribuye las posiciones iniciales de N jugadores de forma pareja
+// y con margen similar al borde
 static void distribute_positions(int n, int W, int H, int *px, int *py){
-    int R = 1; while (R*R < n) R++;
-    int C = (n + R - 1) / R;
+    int R = 1; while (R*R < n) R++;             // filas
+    int C = (n + R - 1) / R;                    // columnas
     int stepX = (C > 0) ? (W / (C + 1)) : W;
     int stepY = (R > 0) ? (H / (R + 1)) : H;
     int k = 0;
@@ -60,7 +66,7 @@ static void distribute_positions(int n, int W, int H, int *px, int *py){
         }
 }
 
-// setea la celda inicial como capturada por el jugador i (no suma score)
+// setea la celda inicial como capturada por el jugador (-id) (no suma score)
 static void paint_initial_positions(state_t *st, int n, const int *px, const int *py){
     int W = st->width;
     for (int i=0;i<n;++i){
@@ -71,11 +77,17 @@ static void paint_initial_positions(state_t *st, int n, const int *px, const int
     }
 }
 
+// Handshake A/B
+// Notifica a la vista (A) y espera que temrine de imprimir (B)
+// Luego el master aplica el delay si corresponde
 static void repaint(sync_t *sy){ sem_post(&sy->A); sem_wait(&sy->B); }
 
+
+// Lanza la vista 
 static pid_t launch_view(const char *view_path, unsigned short W, unsigned short H){
     pid_t pid = fork();
     if (pid == 0){
+        // hijo vista reemplaza imagen de proceso
         char wbuf[16], hbuf[16];
         snprintf(wbuf, sizeof(wbuf), "%u", (unsigned)W);
         snprintf(hbuf, sizeof(hbuf), "%u", (unsigned)H);
@@ -83,9 +95,11 @@ static pid_t launch_view(const char *view_path, unsigned short W, unsigned short
         perror("exec view");
         _exit(127);
     }
-    return pid;
+    return pid;  // padre devuelve el pid de la vista
 }
 
+// Crea un pipe por jugador y redirige stdout del jugador al extremo de escritura del pipe
+// El master se queda con el extremo de lectura para hacer select(2)
 static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], unsigned short W, unsigned short H){
     for (int i = 0; i < n; ++i){
         int pfd[2]; if (pipe(pfd) != 0){ perror("pipe"); p_rd[i]=-1; pids[i]=0; continue; }
@@ -103,6 +117,7 @@ static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], uns
             execlp(players[i], "player", "-i", idxbuf, "-w", wbuf, "-h", hbuf, NULL);
             perror("exec player"); _exit(127);
         } else if (c < 0){
+            // error en fork: limpiar y marcar invalido
             perror("fork player"); close(rd); close(wr); p_rd[i]=-1; pids[i]=0;
         } else {
             // padre: se queda con extremo de lectura
@@ -111,6 +126,9 @@ static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], uns
     }
 }
 
+
+// Helpers logica del juego
+// Devuelve true si hay al menos 1 celda libre, sirve para detectar bloqueo
 static bool any_free_adjacent(const state_t *st, int x0, int y0){
     for (int d=0; d<8; ++d){
         int nx = x0 + DX[d], ny = y0 + DY[d];
@@ -120,16 +138,19 @@ static bool any_free_adjacent(const state_t *st, int x0, int y0){
     return false;
 }
 
-// c
+// Bucle principal
+// Atiende 1 solicitud por jugador habilitado antes de pasar al siguiente
+// Cada jugador tiene G[i] como compuerta para enviar un movimiento
+// Se corta por timeout sin movimientos valiods o por quedarse sin jugadores activos
 static void run_round_robin(state_t *st, sync_t *sy,
     int nplayers, int step_ms, int timeout_s,
     int px[], int py[], int p_rd[], pid_t pids[])
 {
-    bool active_fd[MAX_PLAYERS];
+    bool active_fd[MAX_PLAYERS];    // jugadores con pipe vivo
     for (int i = 0; i < nplayers; ++i)
         active_fd[i] = (p_rd[i] >= 0);
 
-    uint64_t last_valid_ms = now_ms();
+    uint64_t last_valid_ms = now_ms();  // marca del ultimo movimiento valido
 
     // seed: habilitar 1 solicitud por jugador activo (sin acumular)
     for (int i = 0; i < nplayers; ++i){
@@ -137,10 +158,11 @@ static void run_round_robin(state_t *st, sync_t *sy,
     }
 
     while (true) {
+        // timeout global
         if (timeout_s > 0 && (now_ms() - last_valid_ms >= (uint64_t)timeout_s * 1000u))
             break;
 
-        // build fd_set con pipes activos
+        // build fd_set con pipes de los jugadores activos
         fd_set rfds; FD_ZERO(&rfds);
         int maxfd = -1;
         int any_active = 0;
@@ -152,30 +174,31 @@ static void run_round_robin(state_t *st, sync_t *sy,
         }
         if (!any_active) break;
 
-        // select con timeout step_ms
+        // select con timeout step_ms (delay entre impresiones)
         struct timeval tv;
         tv.tv_sec = (time_t)((step_ms > 0) ? (step_ms / 1000) : 0);
         tv.tv_usec = (suseconds_t)((step_ms > 0) ? ((step_ms % 1000) * 1000) : 0);
 
         int ready = select(maxfd + 1, &rfds, NULL, NULL, &tv);
         if (ready < 0) {
-            if (errno == EINTR) continue;
-            perror("select");
+            if (errno == EINTR) continue;       // reintentar si señal interrumpio
+            perror("select");                   // error grave cerrar todo lo activo
             for (int i = 0; i < nplayers; ++i) {
                 if (active_fd[i]) { active_fd[i] = false; if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; } }
             }
             break;
         }
 
-        bool processed[MAX_PLAYERS] = {0};
-        bool any_valid_this_cycle = false;
+        bool processed[MAX_PLAYERS] = {0};      // quien fue atendido en este ciclo
+        bool any_valid_this_cycle = false;      // si hubo algun movimiento valido
 
         if (ready > 0) {
+            // iterar en orden sobre todos los jugadores con datos listos
             for (int i = 0; i < nplayers; ++i) {
                 if (!active_fd[i]) continue;
                 if (!FD_ISSET(p_rd[i], &rfds)) continue;
 
-                unsigned char dir;
+                unsigned char dir;              // jugador envia 1 byte con la direccion
                 ssize_t r = read(p_rd[i], &dir, 1);
                 if (r == 1) {
                     bool moved = false;
@@ -190,20 +213,22 @@ static void run_round_robin(state_t *st, sync_t *sy,
 
                             if (val > 0) {
                                 // valid move: sumar reward y capturar celda como -i
+                                // seccion critica de escritor, actualiza estado compartido
                                 rw_writer_enter(sy);
                                 st->players[i].v_moves++;
-                                st->players[i].score += (unsigned int)val;
+                                st->players[i].score += (unsigned int)val; // suma recompensa
                                 st->board[idx_new] = -i;  // capturada por i
                                 // update shm pos
-                                st->players[i].pos_x = (unsigned short)nx;
+                                st->players[i].pos_x = (unsigned short)nx; // pos en shm
                                 st->players[i].pos_y = (unsigned short)ny;
                                 rw_writer_exit(sy);
 
+                                // estado local del master
                                 px[i] = nx;
                                 py[i] = ny;
 
-                                repaint(sy);
-                                last_valid_ms = now_ms();
+                                repaint(sy);              // imprime vista A/B
+                                last_valid_ms = now_ms(); // reinicia timeout
                                 moved = true;
                             } else {
                                 // destino no libre
@@ -238,8 +263,8 @@ static void run_round_robin(state_t *st, sync_t *sy,
                     active_fd[i] = false;
                     if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
                 } else {
-                    if (errno == EINTR) continue;
-                    active_fd[i] = false;
+                    if (errno == EINTR) continue;   // retry
+                    active_fd[i] = false;           // error de lectura
                     if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
                 }
             }
@@ -267,20 +292,24 @@ static void run_round_robin(state_t *st, sync_t *sy,
             if (count_active <= 1) break;
         }
 
+        // delay entre impresiones si hubo al menos 1 movimiento valido
         if (any_valid_this_cycle && step_ms > 0) sleep_ms(step_ms);
 
+        // si no queda nadie activo, salir
         bool any = false;
         for (int i = 0; i < nplayers; ++i) if (active_fd[i]) { any = true; break; }
         if (!any) break;
     }
 
+    // señal de fin de juego
     rw_writer_enter(sy);
     st->game_over = true;
     rw_writer_exit(sy);
-    for (int i = 0; i < nplayers; ++i) sem_post(&sy->G[i]);
+    for (int i = 0; i < nplayers; ++i) sem_post(&sy->G[i]); // liberar a todos
     repaint(sy);
 }
 
+// Resultados
 static const char* color_name_for_player(unsigned i){
     static const char *names[8] = {
         "blue", "red", "green", "magenta", "cyan", "yellow", "white", "black"
@@ -306,6 +335,7 @@ static void print_results(const state_t *st){
         if (winner < 0){
             winner = (int)i;
         } else {
+            // Criterios de desempate, mas validos, menos invalidos, menor pid
             const player_t *w = &st->players[winner];
             if (p->score > w->score ||
                (p->score == w->score && p->v_moves > w->v_moves) ||
@@ -328,6 +358,8 @@ static void print_results(const state_t *st){
     }
 }
 
+
+
 int main(int argc, char **argv){
     unsigned short W = 0, H = 0;
     int delay = 400;
@@ -339,6 +371,7 @@ int main(int argc, char **argv){
 
     for (int i = 0; i < MAX_PLAYERS; ++i) players[i] = NULL;
 
+    // Parseo de opciones cortas
     int opt;
     const char *optstr = "w:h:d:t:s:v:p:";
     while ((opt = getopt(argc, argv, optstr)) != -1){
@@ -398,10 +431,12 @@ int main(int argc, char **argv){
         return 1;
     }
 
+    // Semilla y cantidad de jugadores
     int step_ms = delay;
     srand((unsigned)seed);
     int nplayers_cfg = nplayers;
 
+    // Crear y mapear shm de estado, sync e inicializacion de semaforos
     bool existed_state=false, created_sync=false;
     state_t *st = ipc_create_and_map_state(W, H, &existed_state);
     if (!st){ perror("master: create state"); return 1; }
@@ -411,6 +446,7 @@ int main(int argc, char **argv){
         perror("sem_init"); ipc_unmap_sync(sy); ipc_unmap_state(st); return 1;
     }
 
+    // Inicializacion del estado compartido con exclusion de escritores
     rw_writer_enter(sy);
     st->width = W; st->height = H;
     st->num_players = (unsigned int)nplayers_cfg;
@@ -426,12 +462,14 @@ int main(int argc, char **argv){
     board_fill_random(st);
     rw_writer_exit(sy);
 
+    // Lanzar vista y jugadores
     pid_t pid_view = launch_view(view_path, W, H);
     if (pid_view < 0){ perror("fork view"); ipc_unmap_sync(sy); ipc_unmap_state(st); return 1; }
 
     int p_rd[MAX_PLAYERS]; pid_t pids[MAX_PLAYERS]; memset(pids,0,sizeof(pids));
     launch_players(nplayers_cfg, players, p_rd, pids, W, H);
 
+    // Registrar pids/nombres en shm
     rw_writer_enter(sy);
     for (int i=0;i<nplayers_cfg;++i){
         snprintf(st->players[i].name, NAME_LEN, "P%d", i);
@@ -439,14 +477,17 @@ int main(int argc, char **argv){
     }
     rw_writer_exit(sy);
 
+    // Posiciones iniciales y pintar
     int px[MAX_PLAYERS], py[MAX_PLAYERS];
     distribute_positions(nplayers_cfg, (int)W, (int)H, px, py);
     rw_writer_enter(sy); paint_initial_positions(st, nplayers_cfg, px, py); rw_writer_exit(sy);
 
     repaint(sy);
 
+    // Loop principal: atenciones round-robin hasta timeout o sin jugadores
     run_round_robin(st, sy, nplayers_cfg, step_ms, timeout, px, py, p_rd, pids);
 
+    // Cierre de pipes de jugadores y espera de todos los hijos
     for (int i = 0; i < nplayers_cfg; ++i) {
         if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
     }
@@ -457,6 +498,7 @@ int main(int argc, char **argv){
 
     if (pid_view > 0) { int stv = 0; waitpid(pid_view, &stv, 0); }
 
+    // Reporte final y limpieza
     print_results(st);
 
     ipc_unmap_sync(sy);

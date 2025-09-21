@@ -31,6 +31,7 @@ typedef enum {
 static const int DX[8] = { 0, 1, 1, 1, 0,-1,-1,-1 };
 static const int DY[8] = {-1,-1, 0, 1, 1, 1, 0,-1 };
 
+// helpers de indexado y limite de grilla
 static inline int  idx_xy(int x,int y,int W){ return y*W + x; }
 static inline bool in_bounds(int x,int y,int W,int H){
     return (0<=x && x<W && 0<=y && y<H);
