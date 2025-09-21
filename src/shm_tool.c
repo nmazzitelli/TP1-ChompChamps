@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "ipc.h"
+#include "ipc.h"    // ipc_create/open/map/unmap/unlink, ipc_init_sync_semaphores
 
 static void usage(const char *p) {
     fprintf(stderr,
@@ -18,6 +18,7 @@ static void usage(const char *p) {
 int main(int argc, char **argv) {
     if (argc < 2) { usage(argv[0]); return 1; }
 
+    // subcmd destroy -> unlink ambas shm
     if (strcmp(argv[1], "destroy") == 0) {
         int e1 = ipc_unlink_state();
         int e2 = ipc_unlink_sync();
@@ -26,24 +27,28 @@ int main(int argc, char **argv) {
         return (e1==0 && e2==0) ? 0 : 1;
     }
 
+    // subcmd init <W> <H> -> crea ambas shm, inicializa semaforos si es necesario
     if (strcmp(argv[1], "init") == 0) {
         if (argc != 4) { usage(argv[0]); return 1; }
         unsigned short w = (unsigned short)strtoul(argv[2], NULL, 10);
         unsigned short h = (unsigned short)strtoul(argv[3], NULL, 10);
+        // limites minimos del tablero
         if (w < 10) {
             w = 10; 
         }
         if (h < 10) {
             h = 10;
         }
-        bool reused = false;
+
+        bool reused = false;    // true si /game_state ya existia
         state_t *st = ipc_create_and_map_state(w, h, &reused);
         if (!st) { perror("state"); return 1; }
 
-        bool created_sync = false;
+        bool created_sync = false;  // true si /game_sync se creo ahora
         sync_t *sy = ipc_create_and_map_sync(&created_sync);
         if (!sy) { perror("sync"); ipc_unmap_state(st); ipc_unlink_state(); return 1; }
 
+        // Si /game_sync es nueva, inicializa semaforos
         if (created_sync) {
             if (ipc_init_sync_semaphores(sy) != 0) {
                 perror("sem_init"); ipc_unmap_sync(sy); ipc_unmap_state(st);

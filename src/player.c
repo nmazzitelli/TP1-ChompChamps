@@ -19,9 +19,10 @@ static void usage(const char *p){
 }
 
 int main(int argc, char **argv){
-    int me = -1;
+    int me = -1;                    // indice del jugador dentro de st->players[]
     unsigned short W = 0, H = 0;
 
+    // Parseo de parametros y fallback posicional
     int opt;
     while ((opt = getopt(argc, argv, "i:w:h:")) != -1){
         switch(opt){
@@ -38,17 +39,20 @@ int main(int argc, char **argv){
     }
     if (W == 0 || H == 0){ usage(argv[0]); return 2; }
 
+    // Conexion con las 2 shm
     state_t *st = ipc_open_and_map_state();
     if (!st){ perror("player: open state"); return 1; }
     sync_t  *sy = ipc_open_and_map_sync();
     if (!sy){ perror("player: open sync"); ipc_unmap_state(st); return 1; }
 
+    // Advertencia si W/H locales difieren de los de la shm
     if (st->width != W || st->height != H){
         fprintf(stderr, "player: advertencia: W/H recibidos (%u,%u) difieren de SHM (%u,%u)\n",
                 (unsigned)W,(unsigned)H,(unsigned)st->width,(unsigned)st->height);
     }
 
-    // Si no vino -i, identificarse por PID que el máster escribe en el estado
+    // Resolver indice si no vino por -i: buscar pid en st->players[]
+    // el master lo escribe al lanzar los jugadores
     if (me < 0) {
         pid_t self = getpid();
         const int max_wait_ms = 3000; // esperar hasta 3s a que el master complete players[]
@@ -67,18 +71,27 @@ int main(int argc, char **argv){
         me = found;
     }
 
+    // Semilla propia para movimientos aleatorios
     unsigned seed = (unsigned)time(NULL) ^ ((unsigned)getpid()<<16) ^ (unsigned)me;
 
+    // Loop principal
+    // Protocolo con el master:
+    // 1. Esperar habilitacion en G[me] (sem_wait)
+    // 2. Leer estado con lock de lector y ver si game_over
+    // 3. Elegir direccion y escribir 1 byte a stdout (pipe del master)
     while (1){
+        // Esperar permiso del master para enviar una solicitud
         if (sem_wait(&sy->G[me]) != 0){
             if (errno == EINTR) continue;
             break;
         }
+        // Leer estado con exclusion de lectores
         rw_reader_enter(sy);
         bool over = st->game_over;
         rw_reader_exit(sy);
         if (over) break;
 
+        // Elegir direccion aleatoria y enviar 1 byte al master
         unsigned char dir = (unsigned char)(rand_r(&seed) % 8);
         ssize_t w = write(STDOUT_FILENO, &dir, 1);
         if (w < 0){
@@ -87,6 +100,7 @@ int main(int argc, char **argv){
         }
     }
 
+    // limpieza
     ipc_unmap_sync(sy);
     ipc_unmap_state(st);
     return 0;
