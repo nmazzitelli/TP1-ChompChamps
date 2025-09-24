@@ -82,6 +82,22 @@ static void paint_initial_positions(state_t *st, int n, const int *px, const int
 // Luego el master aplica el delay si corresponde
 static void repaint(sync_t *sy){ sem_post(&sy->A); sem_wait(&sy->B); }
 
+// chequear si el jugador tiene algun movimiento valido
+static bool has_valid_move(state_t *st, int i) {
+    int x = (int)st->players[i].pos_x;  // pos actual
+    int y = (int)st->players[i].pos_y;  // pos actual
+    int W = (int)st->width, H = (int)st->height;    // dimensiones tablero
+    for (int d = 0; d < 8; d++) {
+        int nx = x + DX[d];
+        int ny = y + DY[d];
+        if (nx >= 0 && nx < W && ny >= 0 && ny < H) {   // dentro de limites
+            if (st->board[ny * W + nx] > 0) {
+                return true;
+            }
+        }
+    }
+    return false;   // no hay movimientos validos
+}
 
 // Lanza la vista 
 static pid_t launch_view(const char *view_path, unsigned short W, unsigned short H){
@@ -241,25 +257,42 @@ static void run_round_robin(state_t *st, sync_t *sy,
                                 rw_writer_enter(sy);
                                 st->players[i].inv_moves++;
                                 rw_writer_exit(sy);
+                                repaint(sy);
                             }
                         } else {
                             // out of bounds
                             rw_writer_enter(sy);
                             st->players[i].inv_moves++;
                             rw_writer_exit(sy);
+                            repaint(sy);
                         }
                     } else {
                         // direccion invalida
                         rw_writer_enter(sy);
                         st->players[i].inv_moves++;
                         rw_writer_exit(sy);
+                        repaint(sy);
                     }
 
                     processed[i] = true;               // se consumió su solicitud
                     any_valid_this_cycle |= moved;
 
                     // re-habilitar SOLO al jugador que ya fue procesado (1 token nuevo)
-                    sem_post(&sy->G[i]);
+                    //sem_pos t(&sy->G[i]);
+                    if (has_valid_move(st, i)) { // tiene movimientos validos
+                        sem_post(&sy->G[i]);
+                    } else {
+                        // no tiene movimientos validos: marcar bloqueado
+                        rw_writer_enter(sy);
+                        st->players[i].blocked = true;
+                        rw_writer_exit(sy);
+                        repaint(sy);
+
+                        // cerraramos su pipe y lo deshabilitamos
+                        if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
+                        active_fd[i] = false;
+                    }
+
                 } else if (r == 0) {
                     // eof: jugador cerro -> marcar bloqueado
                     rw_writer_enter(sy);
@@ -287,7 +320,7 @@ static void run_round_robin(state_t *st, sync_t *sy,
                 repaint(sy);
                 active_fd[i] = false;
                 if (p_rd[i] >= 0) { close(p_rd[i]); p_rd[i] = -1; }
-                if (pids[i] > 0) { kill(pids[i], SIGTERM); }
+                // if (pids[i] > 0) { kill(pids[i], SIGTERM); }  // Ahora si no deberia de matarlos, y el master espera
             }
         }
 
@@ -295,7 +328,8 @@ static void run_round_robin(state_t *st, sync_t *sy,
         {
             int count_active = 0;
             for (int i = 0; i < nplayers; ++i) if (active_fd[i]) count_active++;
-            if (count_active <= 1) break;
+            // if (count_active <= 1) break;                 Es por esta linea que se detenia cuando habia un solo jugador
+            if (nplayers > 1 && count_active <= 1) break;
         }
 
         // delay entre impresiones si hubo al menos 1 movimiento valido
