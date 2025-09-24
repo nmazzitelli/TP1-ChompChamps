@@ -110,11 +110,17 @@ static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], uns
             close(rd);
             if (dup2(wr, STDOUT_FILENO) < 0){ perror("dup2"); _exit(127); }
             if (wr != STDOUT_FILENO) close(wr);
+            for(int j=0; j<n; j++){ 
+                if(p_rd[j]>=0){
+                    close(p_rd[j]);
+                }
+            }
             char idxbuf[16], wbuf[16], hbuf[16];
             snprintf(idxbuf, sizeof(idxbuf), "%d", i);
             snprintf(wbuf,  sizeof(wbuf),  "%u", (unsigned)W);
             snprintf(hbuf,  sizeof(hbuf),  "%u", (unsigned)H);
-            execlp(players[i], "player", "-i", idxbuf, "-w", wbuf, "-h", hbuf, NULL);
+            //execlp(players[i], "player", "-i", idxbuf, "-w", wbuf, "-h", hbuf, NULL);
+            execlp(players[i], "player", wbuf, hbuf, NULL);
             perror("exec player"); _exit(127);
         } else if (c < 0){
             // error en fork: limpiar y marcar invalido
