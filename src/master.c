@@ -126,10 +126,8 @@ static void launch_players(int n, char *players[], int p_rd[], pid_t pids[], uns
             close(rd);
             if (dup2(wr, STDOUT_FILENO) < 0){ perror("dup2"); _exit(127); }
             if (wr != STDOUT_FILENO) close(wr);
-            for(int j=0; j<n; j++){ 
-                if(p_rd[j]>=0){
-                    close(p_rd[j]);
-                }
+            for(int j=0; j<i; j++){
+                if(p_rd[j]>=0) close(p_rd[j]);
             }
             char idxbuf[16], wbuf[16], hbuf[16];
             snprintf(idxbuf, sizeof(idxbuf), "%d", i);
@@ -338,7 +336,13 @@ static void run_round_robin(state_t *st, sync_t *sy,
             for (int i = 0; i <nplayers; ++i) {
                 if(!active_fd[i]) continue; // cuenta solo jguadores aun en juego
                 active++;
-                if (!any_free_adjacent(st, px[i], py[i])) stuck++;
+                if (!has_valid_move(st, i)){
+                    stuck++;
+                    rw_writer_enter(sy);
+                    st->players[i].blocked = true;
+                    rw_writer_exit(sy);
+                    repaint(sy);
+                }
             }
             if(active == 0 || active == stuck) break; // todos bloqueados o ninguno activo
         }
@@ -517,7 +521,10 @@ int main(int argc, char **argv){
     pid_t pid_view = launch_view(view_path, W, H);
     if (pid_view < 0){ perror("fork view"); ipc_unmap_sync(sy); ipc_unmap_state(st); return 1; }
 
-    int p_rd[MAX_PLAYERS]; pid_t pids[MAX_PLAYERS]; memset(pids,0,sizeof(pids));
+    int p_rd[MAX_PLAYERS];
+    for (int i = 0; i < MAX_PLAYERS; ++i) p_rd[i] = -1;
+    pid_t pids[MAX_PLAYERS]; memset(pids,0,sizeof(pids));
+    
     launch_players(nplayers_cfg, players, p_rd, pids, W, H);
 
     // Registrar pids/nombres en shm
