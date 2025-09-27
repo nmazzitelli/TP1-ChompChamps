@@ -325,11 +325,22 @@ static void run_round_robin(state_t *st, sync_t *sy,
         }
 
         // early stop: si queda solo 1 jugador activo, terminar ya mismo
+        // {
+        //     int count_active = 0;
+        //     for (int i = 0; i < nplayers; ++i) if (active_fd[i]) count_active++;
+        //     // if (count_active <= 1) break;                 Es por esta linea que se detenia cuando habia un solo jugador
+        //     if (nplayers > 1 && count_active <= 1) break;
+        // }
+
+        // cambio de fin de juego
         {
-            int count_active = 0;
-            for (int i = 0; i < nplayers; ++i) if (active_fd[i]) count_active++;
-            // if (count_active <= 1) break;                 Es por esta linea que se detenia cuando habia un solo jugador
-            if (nplayers > 1 && count_active <= 1) break;
+            int active = 0, stuck = 0;
+            for (int i = 0; i <nplayers; ++i) {
+                if(!active_fd[i]) continue; // cuenta solo jguadores aun en juego
+                active++;
+                if (!any_free_adjacent(st, px[i], py[i])) stuck++;
+            }
+            if(active == 0 || active == stuck) break; // todos bloqueados o ninguno activo
         }
 
         // delay entre impresiones si hubo al menos 1 movimiento valido
